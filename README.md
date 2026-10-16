@@ -12,8 +12,15 @@ No game data is included. Point it at your own copy.
 cargo run --release -- /path/to/ZlatyKalich.exe   # or the folder containing it
 ```
 
-Without an argument it uses the last location, then the folder next to the binary, then asks.
-The installer `32-ZKinstall.exe` is an old RAR SFX; extract it with `unar` (not Homebrew `7z`).
+The path can be `ZlatyKalich.exe`, its folder, or the original installer `32-ZKinstall.exe`
+(unpacked automatically). Without an argument it uses the last location, then the folder next
+to the binary, then asks.
+
+## Building releases
+
+- macOS (universal, Apple Silicon + Intel): `./scripts/package-macos.sh` → `dist/Zlatý Kalich.app` + zip
+- Linux AppImage: `./scripts/package-linux.sh` (on Linux)
+- Windows / Linux / macOS on CI: `.github/workflows/release.yml` builds all three on every push; tags `v*` publish a GitHub release.
 
 ## Keys
 
@@ -89,4 +96,5 @@ Applied in memory at load; your files are never modified.
 
 - `assets/GeneralUser-GS.sf2` — GeneralUser GS 2.0.3 SoundFont, see its license file.
 - `vendor/swf/` — Ruffle's `swf` crate (MIT/Apache) with a settable legacy code page and a text-override hook.
+- `assets/icon*` — original app icon made for this project.
 - `assets/fonts/` — Liberation Sans (Arial-metric) and DejaVu Sans (Verdana-like) stand in for the Windows device fonts; licenses alongside.

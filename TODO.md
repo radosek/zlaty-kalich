@@ -14,8 +14,13 @@
 - [x] 9. Custom SoundFont support (e.g. converted Windows GS set) over bundled GeneralUser GS.
 
 ## Distribution
-- [ ] 10. Release builds: macOS universal .app, Windows .exe, Linux AppImage, web build.
+- [x] 10. Release builds: macOS universal .app (built, verified). Windows .exe + Linux AppImage via CI workflow (runs once the repo is on GitHub).
+- [ ] 10b. Web build: needs a custom Ruffle wasm build (upstream decodes SWF5 text as cp1252).
 - [x] 11. Import straight from `32-ZKinstall.exe` (RAR SFX) without unar.
+
+## Extras
+- [x] Settings window (F1).
+- [x] Controller support (gilrs).
 
 ## Content
 - [x] 12. Measure and complete the English translation. (Script text was 100% bilingual; 2 drawn texts added.)
