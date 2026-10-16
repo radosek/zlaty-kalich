@@ -1,5 +1,6 @@
 # Vendored from ruffle-rs/ruffle @ 387ea68 with one change: a settable code
 # page for pre-SWF6 strings (see `set_legacy_encoding` in src/string.rs).
+# web/ruffle-swf.patch applies the same change to the Ruffle web build.
 [package]
 name = "swf"
 version = "0.3.0"

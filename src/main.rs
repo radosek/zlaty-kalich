@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod bytecode;
 mod game;
 mod gamepad;
 mod host;
@@ -598,7 +599,12 @@ fn run() -> anyhow::Result<()> {
     host::migrate_saves(&save_dir, &game.dir)?;
     let user_texts = std::fs::read_to_string(save_dir.join("texts.tsv")).ok();
     let texts = Texts::load(user_texts.as_deref())?;
-    let swf = patch::patch(&game.swf, &texts.static_translations(), settings.hotspots)?;
+    let swf = patch::patch(
+        &game.swf,
+        &texts.static_translations(),
+        &texts.script_overrides(),
+        settings.hotspots,
+    )?;
 
     let music = Music::new(
         settings.soundfont.clone(),
@@ -607,7 +613,7 @@ fn run() -> anyhow::Result<()> {
     .inspect_err(|e| tracing::error!("No music: {e:#}"))
     .ok();
     let event_loop = EventLoop::<AppEvent>::with_user_event().build()?;
-    let host = Host::new(game.dir.clone(), save_dir, settings.slot, music, texts, {
+    let host = Host::new(game.dir.clone(), save_dir, settings.slot, music, {
         let proxy = event_loop.create_proxy();
         move |event| {
             let _ = proxy.send_event(event);
@@ -668,13 +674,18 @@ mod headless {
             std::fs::create_dir_all(&out).unwrap();
             host::migrate_saves(saves, &game.dir).unwrap();
             let texts = Texts::load(None).unwrap();
-            let swf = patch::patch(&game.swf, &texts.static_translations(), hotspots).unwrap();
+            let swf = patch::patch(
+                &game.swf,
+                &texts.static_translations(),
+                &texts.script_overrides(),
+                hotspots,
+            )
+            .unwrap();
             let host = Rc::new(RefCell::new(Host::new(
                 game.dir.clone(),
                 saves.to_owned(),
                 1,
                 None,
-                texts,
                 |_| {},
             )));
 

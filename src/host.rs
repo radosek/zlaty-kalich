@@ -4,7 +4,6 @@
 use crate::music::Music;
 use crate::patch;
 use crate::save;
-use crate::texts::Texts;
 use ruffle_core::backend::navigator::{
     ErrorResponse, NavigationMethod, NavigatorBackend, NullExecutor, NullNavigatorBackend,
     OwnedFuture, Request, SuccessResponse,
@@ -36,7 +35,6 @@ pub struct Host {
     pub slot: u8,
     pub english: bool,
     pub music: Option<Music>,
-    pub texts: Texts,
     /// Set by the host clip just before an autosave's `savegame()`.
     autosave_next: bool,
     events: Box<dyn Fn(AppEvent)>,
@@ -48,17 +46,14 @@ impl Host {
         save_dir: PathBuf,
         slot: u8,
         music: Option<Music>,
-        texts: Texts,
         events: impl Fn(AppEvent) + 'static,
     ) -> Self {
-        swf::set_text_overrides(texts.overrides(false));
         Self {
             game_dir,
             save_dir,
             slot,
             english: false,
             music,
-            texts,
             autosave_next: false,
             events: Box::new(events),
         }
@@ -114,7 +109,6 @@ impl Host {
             self.autosave_next = true;
         } else if let Some(value) = args.strip_prefix("english=") {
             self.english = value == "1";
-            swf::set_text_overrides(self.texts.overrides(self.english));
             (self.events)(AppEvent::Title);
         }
     }

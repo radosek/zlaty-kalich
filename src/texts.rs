@@ -9,10 +9,11 @@
 //! ```
 //!
 //! - Rows with an empty `id` are script text (dialogue, hover labels, item
-//!   names). They're matched by `original` and replaced as the game reads them.
+//!   names). They're matched by `original` and rewritten into the game's
+//!   bytecode at load. The game keeps Czech and English lines separately, so
+//!   `lang` is informational for these.
 //! - Rows with an `id` are text drawn into the scenes. Only `en` is supported
 //!   for those: the replacement is shown when the game runs in English.
-//! - `lang` is `*`, `cs` or `en`; script rows apply only in that language.
 //! - Empty `replacement` keeps the original. `\t`, `\n` and `\\` are escaped.
 //!
 //! Put the edited file at `<data dir>/texts.tsv`. Built-in fixes ship in
@@ -22,10 +23,9 @@ use crate::patch::StaticTranslation;
 use anyhow::{Context, bail};
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
-use std::sync::Arc;
 use swf::avm1::read::Reader;
 use swf::avm1::types::{Action, Value};
-use swf::{CharacterId, SwfStr, Tag, TextOverrides};
+use swf::{CharacterId, SwfStr, Tag};
 
 const BUILTIN: &str = include_str!("../assets/texts.tsv");
 const HEADER: &str = "lang\tid\toriginal\treplacement";
@@ -85,16 +85,12 @@ impl Texts {
             .collect()
     }
 
-    /// Script replacements active for the given game language.
-    pub fn overrides(&self, english: bool) -> Option<Arc<TextOverrides>> {
-        let wanted = if english { Lang::English } else { Lang::Czech };
-        let map: TextOverrides = self
-            .script
+    /// Script replacements: original cp1250 bytes -> new text.
+    pub fn script_overrides(&self) -> HashMap<Vec<u8>, String> {
+        self.script
             .iter()
-            .filter(|r| r.lang == Lang::Any || r.lang == wanted)
             .map(|r| (encode(&r.original), r.replacement.clone()))
-            .collect();
-        (!map.is_empty()).then(|| Arc::new(map))
+            .collect()
     }
 }
 
@@ -182,8 +178,6 @@ fn is_human_text(s: &str) -> bool {
 }
 
 pub fn export(swf_data: &[u8]) -> anyhow::Result<String> {
-    // Exporting must show the game's own text, not current overrides.
-    swf::set_text_overrides(None);
     let buf = swf::decompress_swf(swf_data)?;
     let parsed = swf::parse_swf(&buf)?;
     let version = parsed.header.version();
@@ -321,16 +315,10 @@ mod tests {
     }
 
     #[test]
-    fn overrides_follow_language() {
+    fn script_overrides_are_keyed_by_cp1250_bytes() {
         let mut t = Texts::default();
-        t.add("*\t\tŘeka\tPotok\nen\t\tRiver\tStream\ncs\t\tAno\tJo\n")
-            .unwrap();
-        let cs = t.overrides(false).unwrap();
-        assert_eq!(cs.get(&encode("Řeka")).unwrap(), "Potok");
-        assert_eq!(cs.get(&encode("Ano")).unwrap(), "Jo");
-        assert!(cs.get(&encode("River")).is_none());
-        let en = t.overrides(true).unwrap();
-        assert_eq!(en.get(&encode("River")).unwrap(), "Stream");
+        t.add("*\t\tŘeka\tPotok\n").unwrap();
+        assert_eq!(t.script_overrides().get(&encode("Řeka")).unwrap(), "Potok");
     }
 
     #[test]

@@ -47,10 +47,14 @@ pub struct StaticTranslation {
 pub fn patch(
     swf_data: &[u8],
     translations: &[StaticTranslation],
+    script_texts: &HashMap<Vec<u8>, String>,
     hotspots: Hotspots,
 ) -> anyhow::Result<Vec<u8>> {
     let buf = swf::decompress_swf(swf_data).context("decompressing movie")?;
     let parsed = swf::parse_swf(&buf).context("parsing movie")?;
+    let version = parsed.header.version();
+    let replace = |s: &SwfStr| script_texts.get(s.as_bytes()).map(|t| str_cp1250(t));
+    let rewrite = |code: &[u8]| crate::bytecode::rewrite(code, version, &replace).map(leak);
     let mut tags = parsed.tags;
     let mut next_id = FIRST_NEW_ID;
     let mut alloc = || {
@@ -161,12 +165,36 @@ pub fn patch(
 
     walk(&mut tags, &mut |tag| match tag {
         Tag::DefineButton2(button) => {
+            for action in &mut button.actions {
+                if let Some(code) = rewrite(action.action_data) {
+                    action.action_data = code;
+                }
+            }
             if let Some(&overlay) = overlays.get(&button.id) {
                 add_overlay(button, overlay);
             }
         }
-        Tag::DoAction(data) if opens_dialogue(data) => *data = leak(clear_infoline_then(data)),
+        Tag::DoAction(data) => {
+            if let Some(code) = rewrite(data) {
+                *data = code;
+            }
+            if opens_dialogue(data) {
+                *data = leak(clear_infoline_then(data));
+            }
+        }
+        Tag::DefineEditText(text) => {
+            if let Some(new) = text.initial_text().and_then(replace) {
+                **text = (**text).clone().with_initial_text(Some(new));
+            }
+        }
         Tag::PlaceObject(po) => {
+            if let Some(clip) = &mut po.clip_actions {
+                for record in &mut clip.records {
+                    if let Some(code) = rewrite(record.action_data) {
+                        record.action_data = code;
+                    }
+                }
+            }
             if let PlaceObjectAction::Place(id) | PlaceObjectAction::Replace(id) = &mut po.action
                 && let Some(swap) = swaps.get(id)
             {
@@ -617,7 +645,7 @@ mod game_tests {
     #[test]
     #[ignore]
     fn every_button_but_full_screen_gets_an_overlay() {
-        let patched = patch(&game_swf(), &[], Hotspots::HoldSpace).unwrap();
+        let patched = patch(&game_swf(), &[], &HashMap::new(), Hotspots::HoldSpace).unwrap();
         let buf = swf::decompress_swf(&patched[..]).unwrap();
         let parsed = swf::parse_swf(&buf).unwrap();
         let (mut with, mut without) = (0, vec![]);
@@ -632,5 +660,22 @@ mod game_tests {
         }
         // 2269 is the full-screen "click to skip" intro button.
         assert_eq!(without, [2269], "{with} patched");
+    }
+
+    #[test]
+    #[ignore]
+    fn builtin_text_fixes_land_in_bytecode() {
+        let texts = crate::texts::Texts::load(None).unwrap();
+        let patched = patch(
+            &game_swf(),
+            &texts.static_translations(),
+            &texts.script_overrides(),
+            Hotspots::HoldSpace,
+        )
+        .unwrap();
+        let body = swf::decompress_swf(&patched[..]).unwrap().data;
+        let has = |s: &str| contains(&body, &encoding_rs::WINDOWS_1250.encode(s).0);
+        assert!(has("Vypadá to jako graffiti."));
+        assert!(!has("Vypadá to jako graffitti."));
     }
 }
