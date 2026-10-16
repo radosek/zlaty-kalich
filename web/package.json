@@ -1,16 +1,16 @@
 {
-  "name": "boxb-web",
+  "name": "zlaty-kalich-web-player",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "./build.sh"
   },
   "dependencies": {
+    "idb": "8.0.3",
     "libarchive.js": "2.0.2",
     "spessasynth_lib": "4.3.14"
   },
   "devDependencies": {
-    "esbuild": "0.28.2",
-    "wrangler": "4.151.1"
+    "esbuild": "0.28.2"
   }
 }
