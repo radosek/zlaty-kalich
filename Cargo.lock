@@ -2046,6 +2046,7 @@ dependencies = [
  "byteorder-lite",
  "moxcms",
  "num-traits",
+ "png",
  "tiff",
 ]
 
@@ -5932,6 +5933,7 @@ dependencies = [
  "cpal",
  "dirs",
  "encoding_rs",
+ "image",
  "rfd",
  "ruffle_core",
  "ruffle_frontend_utils",

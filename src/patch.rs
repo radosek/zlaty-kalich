@@ -3,8 +3,9 @@
 //!
 //! - Host API: an invisible clip on the root timeline that lets the app talk
 //!   to the game (see [`host`]).
-//! - Hotspot highlight: every button gets an overlay over its hit area, shown
-//!   while Space is held. Scene hotspots are invisible hit-only buttons that
+//! - Hotspot highlight: every button gets a yellow-tinted copy of its own hit
+//!   area (the shape the authors traced around the object), shown while Space
+//!   is held. Scene hotspots are invisible hit-only buttons that
 //!   the 2001 game placed *under* the scenery (Flash buttons stay clickable
 //!   when covered), so those are raised above it; they draw nothing else, so
 //!   only the overlay becomes visible.
@@ -19,9 +20,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use swf::avm1::types::{Action, GetUrl, GetUrl2, If, Push, SendVarsMethod, Value};
 use swf::{
     BlendMode, ButtonRecord, ButtonState, CharacterId, ClipAction, ClipActions, ClipEventFlag,
-    Color, ColorTransform, EditText, FillStyle, Fixed16, Matrix, PlaceObject, PlaceObjectAction,
-    Point, Rectangle, Shape, ShapeFlag, ShapeRecord, ShapeStyles, Sprite, StyleChangeData, SwfStr,
-    Tag, Twips,
+    Color, ColorTransform, EditText, Fixed8, Matrix, PlaceObject, PlaceObjectAction, Point,
+    Rectangle, Sprite, SwfStr, Tag, Twips,
 };
 
 /// Flash key codes the app sends to the host clip. The game reads no keys.
@@ -38,7 +38,6 @@ const SPACE: i32 = 32;
 const PROP_VISIBLE: i32 = 7;
 /// New characters are numbered from here; the game uses ids below 3000.
 const FIRST_NEW_ID: CharacterId = 60000;
-const HIGHLIGHT_UNIT: i32 = 2000;
 
 pub struct StaticTranslation {
     pub id: CharacterId,
@@ -59,37 +58,60 @@ pub fn patch(
         next_id
     };
 
-    let bounds = character_bounds(&tags);
     let mut defs: Vec<Tag> = Vec::new();
 
-    // Hotspot highlight overlay, shared by every button.
-    let rect = alloc();
-    defs.push(Tag::DefineShape(Box::new(filled_rect(
-        rect,
-        Color {
-            r: 0xFF,
-            g: 0xE0,
-            b: 0x40,
-            a: 0x60,
-        },
-    ))));
-    let overlay = alloc();
+    // Hotspot highlight: per button, a copy of its hit area tinted yellow.
     let toggle = leak(set_visible_to(match hotspots {
         Hotspots::HoldSpace => key_is_down(SPACE),
         Hotspots::Always => assemble(&[push(vec![Value::Bool(true)])]),
         Hotspots::Off => assemble(&[push(vec![Value::Bool(false)])]),
     }));
-    defs.push(Tag::DefineSprite(Sprite {
-        id: overlay,
-        num_frames: 2,
-        tags: vec![
-            place(rect, 1, None),
-            Tag::DoAction(toggle),
-            Tag::ShowFrame,
-            Tag::DoAction(toggle),
-            Tag::ShowFrame,
-        ],
-    }));
+    let stage = &parsed.header.swf_header().stage_size;
+    let shape_bounds: HashMap<CharacterId, Rectangle<Twips>> = tags
+        .iter()
+        .filter_map(|t| match t {
+            Tag::DefineShape(s) => Some((s.id, s.shape_bounds.clone())),
+            Tag::DefineText(t) | Tag::DefineText2(t) => {
+                Some((t.id, transform(&t.matrix, &t.bounds)))
+            }
+            _ => None,
+        })
+        .collect();
+    let mut overlays = HashMap::new();
+    for tag in &tags {
+        let Tag::DefineButton2(button) = tag else {
+            continue;
+        };
+        let hit: Vec<_> = button
+            .records
+            .iter()
+            .filter(|r| r.states.contains(ButtonState::HIT_TEST))
+            .collect();
+        let area = hit
+            .iter()
+            .filter_map(|r| Some(transform(&r.matrix, shape_bounds.get(&r.id)?)))
+            .fold(Rectangle::INVALID, |acc, r| acc.union(&r));
+        // Full-screen "click anywhere" buttons would tint the whole scene.
+        if hit.is_empty() || covers_most(&area, stage) {
+            continue;
+        }
+        let overlay = alloc();
+        let mut frame: Vec<Tag> = hit
+            .iter()
+            .zip(1..)
+            .map(|(r, depth)| place_tinted(r.id, depth, r.matrix))
+            .collect();
+        frame.push(Tag::DoAction(toggle));
+        frame.push(Tag::ShowFrame);
+        frame.push(Tag::DoAction(toggle));
+        frame.push(Tag::ShowFrame);
+        defs.push(Tag::DefineSprite(Sprite {
+            id: overlay,
+            num_frames: 2,
+            tags: frame,
+        }));
+        overlays.insert(button.id, overlay);
+    }
 
     // Host API clip.
     let host = alloc();
@@ -107,7 +129,9 @@ pub fn patch(
             anyhow::bail!("no static text #{}", t.id);
         };
         let field = alloc();
-        defs.push(Tag::DefineEditText(Box::new(english_field(field, font, text, &t.english))));
+        defs.push(Tag::DefineEditText(Box::new(english_field(
+            field, font, text, &t.english,
+        ))));
         let swap = alloc();
         defs.push(Tag::DefineSprite(Sprite {
             id: swap,
@@ -136,7 +160,11 @@ pub fn patch(
     });
 
     walk(&mut tags, &mut |tag| match tag {
-        Tag::DefineButton2(button) => add_highlight(button, overlay, &bounds),
+        Tag::DefineButton2(button) => {
+            if let Some(&overlay) = overlays.get(&button.id) {
+                add_overlay(button, overlay);
+            }
+        }
         Tag::DoAction(data) if opens_dialogue(data) => *data = leak(clear_infoline_then(data)),
         Tag::PlaceObject(po) => {
             if let PlaceObjectAction::Place(id) | PlaceObjectAction::Replace(id) = &mut po.action
@@ -253,30 +281,16 @@ fn raise(tags: &mut [Tag], hidden: &HashSet<CharacterId>) -> u16 {
     top + remap.len() as u16
 }
 
-fn character_bounds(tags: &[Tag]) -> HashMap<CharacterId, Rectangle<Twips>> {
-    let mut map = HashMap::new();
-    for tag in tags {
-        match tag {
-            Tag::DefineShape(s) => {
-                map.insert(s.id, s.shape_bounds.clone());
-            }
-            Tag::DefineText(t) | Tag::DefineText2(t) => {
-                map.insert(t.id, transform(&t.matrix, &t.bounds));
-            }
-            Tag::DefineEditText(e) => {
-                map.insert(e.id(), e.bounds().clone());
-            }
-            _ => {}
-        }
-    }
-    map
-}
-
 fn find_text<'b>(tags: &'b [Tag], id: CharacterId) -> Option<&'b swf::Text> {
     tags.iter().find_map(|t| match t {
         Tag::DefineText(t) | Tag::DefineText2(t) if t.id == id => Some(&**t),
         _ => None,
     })
+}
+
+fn covers_most(area: &Rectangle<Twips>, stage: &Rectangle<Twips>) -> bool {
+    let size = |r: &Rectangle<Twips>| f64::from(r.width().get()) * f64::from(r.height().get());
+    area.is_valid() && size(area) > 0.5 * size(stage)
 }
 
 fn transform(m: &Matrix, r: &Rectangle<Twips>) -> Rectangle<Twips> {
@@ -290,80 +304,44 @@ fn transform(m: &Matrix, r: &Rectangle<Twips>) -> Rectangle<Twips> {
     .fold(Rectangle::INVALID, |acc, p| acc.encompass(m.clone() * p))
 }
 
-fn add_highlight(
-    button: &mut swf::Button,
-    overlay: CharacterId,
-    bounds: &HashMap<CharacterId, Rectangle<Twips>>,
-) {
-    let hit = button
-        .records
-        .iter()
-        .filter(|r| r.states.contains(ButtonState::HIT_TEST))
-        .filter_map(|r| Some(transform(&r.matrix, bounds.get(&r.id)?)))
-        .fold(Rectangle::INVALID, |acc, r| acc.union(&r));
-    if !hit.is_valid() {
-        return;
-    }
+fn add_overlay(button: &mut swf::Button, overlay: CharacterId) {
     let depth = button.records.iter().map(|r| r.depth).max().unwrap_or(0) + 1;
-    let scale = |len: Twips| Fixed16::from_f64(f64::from(len.get()) / f64::from(HIGHLIGHT_UNIT));
     button.records.push(ButtonRecord {
         states: ButtonState::UP | ButtonState::OVER | ButtonState::DOWN,
         id: overlay,
         depth,
-        matrix: Matrix {
-            a: scale(hit.width()),
-            d: scale(hit.height()),
-            tx: hit.x_min,
-            ty: hit.y_min,
-            ..Matrix::IDENTITY
-        },
+        matrix: Matrix::IDENTITY,
         color_transform: ColorTransform::IDENTITY,
         filters: vec![],
         blend_mode: BlendMode::Normal,
     });
 }
 
-fn filled_rect(id: CharacterId, color: Color) -> Shape {
-    let size = Twips::new(HIGHLIGHT_UNIT);
-    let edge = |dx: i32, dy: i32| ShapeRecord::StraightEdge {
-        delta: swf::PointDelta::new(Twips::new(dx), Twips::new(dy)),
+/// Places a character flattened to translucent yellow.
+fn place_tinted<'a>(id: CharacterId, depth: u16, matrix: Matrix) -> Tag<'a> {
+    let Tag::PlaceObject(mut po) = place(id, depth, None) else {
+        unreachable!()
     };
-    let bounds = Rectangle {
-        x_min: Twips::ZERO,
-        x_max: size,
-        y_min: Twips::ZERO,
-        y_max: size,
-    };
-    Shape {
-        version: 3,
-        id,
-        shape_bounds: bounds.clone(),
-        edge_bounds: bounds,
-        flags: ShapeFlag::empty(),
-        styles: ShapeStyles {
-            fill_styles: vec![FillStyle::Color(color)],
-            line_styles: vec![],
-        },
-        shape: vec![
-            ShapeRecord::StyleChange(Box::new(StyleChangeData {
-                move_to: Some(Point::new(Twips::ZERO, Twips::ZERO)),
-                fill_style_0: None,
-                fill_style_1: Some(1),
-                line_style: None,
-                new_styles: None,
-            })),
-            edge(HIGHLIGHT_UNIT, 0),
-            edge(0, HIGHLIGHT_UNIT),
-            edge(-HIGHLIGHT_UNIT, 0),
-            edge(0, -HIGHLIGHT_UNIT),
-        ],
-    }
+    po.matrix = Some(matrix);
+    po.color_transform = Some(ColorTransform {
+        r_multiply: Fixed8::ZERO,
+        g_multiply: Fixed8::ZERO,
+        b_multiply: Fixed8::ZERO,
+        a_multiply: Fixed8::from_f32(0.45),
+        r_add: 0xFF,
+        g_add: 0xD0,
+        b_add: 0x30,
+        a_add: 0,
+    });
+    Tag::PlaceObject(po)
 }
 
 fn font_named(tags: &[Tag], name: &str) -> Option<CharacterId> {
     tags.iter().find_map(|t| match t {
         Tag::DefineFont2(f) if f.name.to_str_lossy(encoding_rs::WINDOWS_1250) == name => Some(f.id),
-        Tag::DefineFontInfo(f) if f.name.to_str_lossy(encoding_rs::WINDOWS_1250) == name => Some(f.id),
+        Tag::DefineFontInfo(f) if f.name.to_str_lossy(encoding_rs::WINDOWS_1250) == name => {
+            Some(f.id)
+        }
         _ => None,
     })
 }
@@ -556,7 +534,10 @@ fn report_language() -> Vec<u8> {
     body.extend(get("_root.english"));
     body.extend(assemble(&[
         Action::SetVariable,
-        push(vec![s(&format!("FSCommand:{}", host::COMMAND)), s("english=")]),
+        push(vec![
+            s(&format!("FSCommand:{}", host::COMMAND)),
+            s("english="),
+        ]),
     ]));
     body.extend(get("zkl"));
     body.extend(assemble(&[
@@ -628,12 +609,14 @@ mod game_tests {
 
     fn game_swf() -> Vec<u8> {
         let path = std::env::var("ZK_GAME").expect("set ZK_GAME");
-        crate::game::Game::open(std::path::Path::new(&path)).unwrap().swf
+        crate::game::Game::open(std::path::Path::new(&path))
+            .unwrap()
+            .swf
     }
 
     #[test]
     #[ignore]
-    fn every_button_gets_an_overlay() {
+    fn every_button_but_full_screen_gets_an_overlay() {
         let patched = patch(&game_swf(), &[], Hotspots::HoldSpace).unwrap();
         let buf = swf::decompress_swf(&patched[..]).unwrap();
         let parsed = swf::parse_swf(&buf).unwrap();
@@ -647,6 +630,7 @@ mod game_tests {
                 }
             }
         }
-        assert!(without.is_empty(), "{with} patched, missing: {without:?}");
+        // 2269 is the full-screen "click to skip" intro button.
+        assert_eq!(without, [2269], "{with} patched");
     }
 }

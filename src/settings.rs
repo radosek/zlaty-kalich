@@ -55,7 +55,11 @@ impl Default for Settings {
 
 impl Settings {
     fn path() -> Option<PathBuf> {
-        Some(dirs::config_dir()?.join("zlaty-kalich").join("settings.toml"))
+        Some(
+            dirs::config_dir()?
+                .join("zlaty-kalich")
+                .join("settings.toml"),
+        )
     }
 
     pub fn load() -> Self {

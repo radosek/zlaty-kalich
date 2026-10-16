@@ -23,7 +23,8 @@ impl Game {
             path.to_owned()
         };
         let data = std::fs::read(&exe).with_context(|| format!("reading {}", exe.display()))?;
-        let swf = extract_swf(&data).with_context(|| format!("{} is not the game", exe.display()))?;
+        let swf =
+            extract_swf(&data).with_context(|| format!("{} is not the game", exe.display()))?;
         let dir = exe
             .parent()
             .map(Path::to_owned)

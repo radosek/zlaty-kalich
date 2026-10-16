@@ -8,12 +8,46 @@
 
 /// One character each, taken in order from the first argument.
 const FLAG_KEYS: [&str; 40] = [
-    "msdvere", "english", "zidstate", "partituruma", "ruzynenav", "kosstate", "truhla", "romano",
-    "romstate", "certifikat", "prase", "letenka", "hlidachlida", "vodkadverestate", "klicsebrat",
-    "generaljede", "pasakstate", "fotakstate", "obraz", "platilslapce", "sprejerkastate",
-    "sunastate", "sunakecystate", "knihastate", "ropestate", "dalklenoty", "budhastate",
-    "droggang", "ozralastate", "bednahofstate", "hoffmanstate", "rozbuskastate", "turistastate",
-    "fbistate", "zetonystate", "mnichstate", "poz", "qvality", "ifs", "imusic",
+    "msdvere",
+    "english",
+    "zidstate",
+    "partituruma",
+    "ruzynenav",
+    "kosstate",
+    "truhla",
+    "romano",
+    "romstate",
+    "certifikat",
+    "prase",
+    "letenka",
+    "hlidachlida",
+    "vodkadverestate",
+    "klicsebrat",
+    "generaljede",
+    "pasakstate",
+    "fotakstate",
+    "obraz",
+    "platilslapce",
+    "sprejerkastate",
+    "sunastate",
+    "sunakecystate",
+    "knihastate",
+    "ropestate",
+    "dalklenoty",
+    "budhastate",
+    "droggang",
+    "ozralastate",
+    "bednahofstate",
+    "hoffmanstate",
+    "rozbuskastate",
+    "turistastate",
+    "fbistate",
+    "zetonystate",
+    "mnichstate",
+    "poz",
+    "qvality",
+    "ifs",
+    "imusic",
 ];
 
 /// Whole arguments 2..=5.
@@ -111,6 +145,9 @@ mod tests {
             .map(|i| format!("&itt{i}={}", if i == 0 { "25" } else { "" }))
             .collect();
         let cmd = format!("{flags}\t1.5\t1000\t1951\t25\t{}", items.join("\t"));
-        assert_eq!(String::from_utf8(encode(&param_str(&cmd))).unwrap(), shipped);
+        assert_eq!(
+            String::from_utf8(encode(&param_str(&cmd))).unwrap(),
+            shipped
+        );
     }
 }

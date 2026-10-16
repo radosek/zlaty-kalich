@@ -480,3 +480,128 @@ fn main() {
         std::process::exit(1);
     }
 }
+
+#[cfg(test)]
+mod headless {
+    //! Plays the real game offscreen and saves PNGs, for checking visual
+    //! changes without a window:
+    //! `ZK_GAME=/path/to/game ZK_SHOTS=/tmp/out cargo test headless -- --ignored`
+    use super::*;
+    use ruffle_core::backend::navigator::NullNavigatorBackend;
+    use ruffle_core::events::MouseButton;
+    use ruffle_render_wgpu::target::TextureTarget;
+    use std::any::Any;
+
+    const FRAME: f64 = 1000.0 / 12.0;
+
+    struct Headless {
+        player: Arc<Mutex<Player>>,
+        executor: NullExecutor,
+        out: PathBuf,
+    }
+
+    impl Headless {
+        fn run(&mut self, seconds: f64) {
+            for _ in 0..(seconds * 1000.0 / FRAME) as u32 {
+                // `tick` would wait on stream sounds, which need an audio device.
+                self.player.lock().unwrap().run_frame();
+                self.executor.run();
+            }
+        }
+
+        fn send(&mut self, event: PlayerEvent) {
+            self.player.lock().unwrap().handle_event(event);
+            self.executor.run();
+            self.run(0.2);
+        }
+
+        fn click(&mut self, x: f64, y: f64) {
+            self.send(PlayerEvent::MouseMove { x, y });
+            self.send(PlayerEvent::MouseDown {
+                x,
+                y,
+                button: MouseButton::Left,
+                index: None,
+            });
+            self.send(PlayerEvent::MouseUp {
+                x,
+                y,
+                button: MouseButton::Left,
+            });
+        }
+
+        fn shot(&self, name: &str) {
+            let mut p = self.player.lock().unwrap();
+            p.render();
+            let renderer =
+                <dyn Any>::downcast_mut::<WgpuRenderBackend<TextureTarget>>(p.renderer_mut())
+                    .unwrap();
+            let image = renderer.capture_frame().unwrap();
+            image.save(self.out.join(format!("{name}.png"))).unwrap();
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn headless_hotspots() {
+        swf::set_legacy_encoding(encoding_rs::WINDOWS_1250);
+        let game = Game::open(Path::new(&std::env::var("ZK_GAME").unwrap())).unwrap();
+        let out = PathBuf::from(std::env::var("ZK_SHOTS").unwrap());
+        std::fs::create_dir_all(&out).unwrap();
+        let saves = tempfile::tempdir().unwrap();
+        std::fs::copy(
+            game::find_in(&game.dir, host::SAVE_FILE),
+            saves.path().join(host::SAVE_FILE),
+        )
+        .unwrap();
+        let swf = patch::patch(&game.swf, &[], settings::Hotspots::Always).unwrap();
+
+        let renderer = WgpuRenderBackend::for_offscreen(
+            (800, 600),
+            wgpu::Backends::PRIMARY,
+            wgpu::PowerPreference::HighPerformance,
+        )
+        .unwrap();
+        let executor = NullExecutor::new();
+        let player = PlayerBuilder::new()
+            .with_renderer(renderer)
+            .with_navigator(NullNavigatorBackend::with_base_path(saves.path(), &executor).unwrap())
+            .with_quality(BEST_QUALITY)
+            .with_load_behavior(ruffle_core::LoadBehavior::Blocking)
+            .with_autoplay(true)
+            .build();
+        let url = url::Url::from_file_path(saves.path().join("kalich.swf")).unwrap();
+        let movie = SwfMovieData::from_data(&swf, url.into(), None, None).unwrap();
+        {
+            let mut p = player.lock().unwrap();
+            p.update(|uc| uc.set_root_movie(movie));
+            p.set_viewport_dimensions(ViewportDimensions {
+                width: 800,
+                height: 600,
+                scale_factor: 1.0,
+            });
+        }
+        let mut h = Headless {
+            player,
+            executor,
+            out,
+        };
+        h.run(3.0);
+        h.click(742.0, 57.0); // skip intro
+        h.run(5.0);
+        h.shot("1-language");
+        h.click(223.0, 402.0); // ČESKY
+        h.run(20.0);
+        h.shot("2-menu");
+        h.click(394.0, 524.0); // POKRAČOVAT VE HŘE
+        h.run(5.0);
+        h.click(742.0, 57.0); // skip story
+        h.run(15.0);
+        h.shot("3-menu");
+        h.click(412.0, 173.0); // remote: green = start
+        h.run(20.0);
+        h.click(742.0, 57.0); // skip story
+        h.run(20.0);
+        h.shot("4-scene");
+    }
+}

@@ -112,7 +112,10 @@ impl UiBackend for Ui {
         Vec::new()
     }
 
-    fn display_file_open_dialog(&mut self, _filters: Vec<FileFilter>) -> Option<DialogResultFuture> {
+    fn display_file_open_dialog(
+        &mut self,
+        _filters: Vec<FileFilter>,
+    ) -> Option<DialogResultFuture> {
         Some(Box::pin(async { Ok(FileDialogResult::Canceled) }))
     }
 

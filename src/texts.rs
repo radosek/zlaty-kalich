@@ -119,7 +119,10 @@ fn parse(tsv: &str) -> anyhow::Result<Vec<Row>> {
         };
         let id = match id {
             "" => None,
-            id => Some(id.parse().with_context(|| format!("line {}: bad id", n + 1))?),
+            id => Some(
+                id.parse()
+                    .with_context(|| format!("line {}: bad id", n + 1))?,
+            ),
         };
         if id.is_some() && lang != Lang::English {
             bail!("line {}: drawn text can only be replaced for `en`", n + 1);
@@ -143,7 +146,10 @@ fn decode(s: &SwfStr) -> String {
 }
 
 fn escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('\t', "\\t").replace('\r', "").replace('\n', "\\n")
+    s.replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\r', "")
+        .replace('\n', "\\n")
 }
 
 fn unescape(s: &str) -> String {
@@ -201,10 +207,15 @@ pub fn export(swf_data: &[u8]) -> anyhow::Result<String> {
     let fonts = font_codes(&parsed.tags);
     visit(&parsed.tags, &mut |tag| match tag {
         Tag::DoAction(code) => collect(&mut script, code),
-        Tag::DefineButton2(b) => b.actions.iter().for_each(|a| collect(&mut script, a.action_data)),
+        Tag::DefineButton2(b) => b
+            .actions
+            .iter()
+            .for_each(|a| collect(&mut script, a.action_data)),
         Tag::PlaceObject(po) => {
             if let Some(clip) = &po.clip_actions {
-                clip.records.iter().for_each(|r| collect(&mut script, r.action_data));
+                clip.records
+                    .iter()
+                    .for_each(|r| collect(&mut script, r.action_data));
             }
         }
         Tag::DefineEditText(e) => {
@@ -223,7 +234,10 @@ pub fn export(swf_data: &[u8]) -> anyhow::Result<String> {
 
     let mut out = String::new();
     writeln!(out, "{HEADER}")?;
-    writeln!(out, "# Fill in `replacement`; see `texts.rs` docs for the format.")?;
+    writeln!(
+        out,
+        "# Fill in `replacement`; see `texts.rs` docs for the format."
+    )?;
     for s in script.iter().filter(|s| is_human_text(s)) {
         writeln!(out, "*\t\t{}\t", escape(s))?;
     }
@@ -309,7 +323,8 @@ mod tests {
     #[test]
     fn overrides_follow_language() {
         let mut t = Texts::default();
-        t.add("*\t\tŘeka\tPotok\nen\t\tRiver\tStream\ncs\t\tAno\tJo\n").unwrap();
+        t.add("*\t\tŘeka\tPotok\nen\t\tRiver\tStream\ncs\t\tAno\tJo\n")
+            .unwrap();
         let cs = t.overrides(false).unwrap();
         assert_eq!(cs.get(&encode("Řeka")).unwrap(), "Potok");
         assert_eq!(cs.get(&encode("Ano")).unwrap(), "Jo");
