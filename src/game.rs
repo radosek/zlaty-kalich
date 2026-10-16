@@ -101,7 +101,10 @@ fn unpack_installer(installer: &Path, dest: &Path) -> anyhow::Result<()> {
             }
         };
     }
-    bail!("{} has too many entries for the game installer", installer.display())
+    bail!(
+        "{} has too many entries for the game installer",
+        installer.display()
+    )
 }
 
 /// A plain top-level file name with an expected extension, or nothing.

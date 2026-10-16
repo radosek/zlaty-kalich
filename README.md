@@ -24,10 +24,22 @@ The installer `32-ZKinstall.exe` is an old RAR SFX; extract it with `unar` (not 
 | `Ctrl`/`Cmd` + `0` | choose the autosave, written when you quit |
 | `Ctrl`/`Cmd` + `↑` / `↓` | music volume |
 | `F11` / `Alt+Enter` | fullscreen (remembered; overrides the in-game option) |
+| `F1` / `Ctrl`/`Cmd` + `,` | settings window |
+
+## Controller
+
+| | |
+|---|---|
+| left stick / d-pad | move the pointer |
+| A / right trigger | click |
+| B / left trigger | right-click |
+| X / Y (hold) | highlight everything clickable |
+| Start | the game's menu (remote control) |
+| Back / Select | settings window |
 
 ## Settings
 
-`settings.toml` in the config dir (`~/Library/Application Support/zlaty-kalich` on macOS):
+Open with `F1`. Stored as `settings.toml` in the config dir (`~/Library/Application Support/zlaty-kalich` on macOS):
 
 ```toml
 music_volume = 80

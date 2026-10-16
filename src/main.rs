@@ -1,12 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod game;
+mod gamepad;
 mod host;
 mod keys;
 mod music;
 mod patch;
 mod save;
 mod settings;
+mod settings_window;
 mod texts;
 mod ui;
 
@@ -42,6 +44,12 @@ use winit::window::{Fullscreen, Window, WindowId};
 
 const BEST_QUALITY: StageQuality = StageQuality::High8x8Linear;
 const VOLUME_STEP: u8 = 10;
+/// Pointer speed for a fully deflected stick, in logical pixels per second.
+const STICK_SPEED: f64 = 700.0;
+/// Stage size of the 2001 movie.
+const STAGE: (f64, f64) = (800.0, 600.0);
+/// The remote icon top right opens the game's menu during play.
+const OPEN_MENU: (f64, f64) = (763.0, 39.0);
 
 struct Running {
     window: Arc<Window>,
@@ -59,6 +67,9 @@ struct App {
     host: Rc<RefCell<Host>>,
     settings: Settings,
     running: Option<Running>,
+    settings_window: Option<settings_window::SettingsWindow>,
+    gamepad: gamepad::Gamepad,
+    last_poll: Instant,
 }
 
 impl App {
@@ -160,8 +171,132 @@ impl App {
         self.settings.save();
     }
 
+    fn open_settings(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(w) = &self.settings_window {
+            return w.focus();
+        }
+        let english = self.host.borrow().english;
+        match settings_window::SettingsWindow::open(event_loop, english) {
+            Ok(w) => self.settings_window = Some(w),
+            Err(e) => tracing::error!("Couldn't open settings: {e:#}"),
+        }
+    }
+
+    fn apply(&mut self, changes: settings_window::Changes) {
+        if changes.volume
+            && let Some(music) = &self.host.borrow().music
+        {
+            music.set_volume(f32::from(self.settings.music_volume) / 100.0);
+        }
+        if changes.fullscreen
+            && let (Some(on), Some(r)) = (self.settings.fullscreen, &self.running)
+        {
+            r.window
+                .set_fullscreen(on.then_some(Fullscreen::Borderless(None)));
+        }
+        if changes.slot {
+            self.host.borrow_mut().slot = self.settings.slot;
+        }
+        if changes.quality
+            && self.settings.quality == Quality::Game
+            && let Some(r) = &self.running
+        {
+            r.player.lock().unwrap().set_quality(StageQuality::High);
+        }
+        let any = changes.volume
+            || changes.quality
+            || changes.fullscreen
+            || changes.slot
+            || changes.needs_restart;
+        if any {
+            self.settings.save();
+            if let Some(r) = &self.running {
+                self.update_title(r);
+            }
+        }
+    }
+
+    /// Maps a point on the 800×600 stage to window pixels (letterboxed).
+    fn stage_to_window(&self, (x, y): (f64, f64)) -> Option<PhysicalPosition<f64>> {
+        let size = self.running.as_ref()?.window.inner_size();
+        let (w, h) = (f64::from(size.width), f64::from(size.height));
+        let scale = (w / STAGE.0).min(h / STAGE.1);
+        Some(PhysicalPosition::new(
+            (w - STAGE.0 * scale) / 2.0 + x * scale,
+            (h - STAGE.1 * scale) / 2.0 + y * scale,
+        ))
+    }
+
+    fn move_pointer(&mut self, to: PhysicalPosition<f64>) {
+        let Some(r) = &mut self.running else { return };
+        let _ = r.window.set_cursor_position(to);
+        r.mouse = to;
+        r.send(PlayerEvent::MouseMove { x: to.x, y: to.y });
+    }
+
+    fn mouse_button(&mut self, button: RuffleMouseButton, down: bool) {
+        let Some(r) = &mut self.running else { return };
+        let (x, y) = (r.mouse.x, r.mouse.y);
+        r.send(if down {
+            PlayerEvent::MouseDown {
+                x,
+                y,
+                button,
+                index: None,
+            }
+        } else {
+            PlayerEvent::MouseUp { x, y, button }
+        });
+    }
+
+    fn poll_gamepad(&mut self, event_loop: &ActiveEventLoop) {
+        let dt = self.last_poll.elapsed().as_secs_f64().min(0.1);
+        self.last_poll = Instant::now();
+        for action in self.gamepad.poll() {
+            match action {
+                gamepad::PadAction::Click(down) => self.mouse_button(RuffleMouseButton::Left, down),
+                gamepad::PadAction::RightClick(down) => {
+                    self.mouse_button(RuffleMouseButton::Right, down)
+                }
+                gamepad::PadAction::Highlight(down) => {
+                    let Some(r) = &mut self.running else { continue };
+                    let key = KeyDescriptor {
+                        physical_key: PhysicalKey::Space,
+                        logical_key: LogicalKey::Character(' '),
+                        key_location: KeyLocation::Standard,
+                    };
+                    r.send(if down {
+                        PlayerEvent::KeyDown { key }
+                    } else {
+                        PlayerEvent::KeyUp { key }
+                    });
+                }
+                gamepad::PadAction::GameMenu => {
+                    if let Some(at) = self.stage_to_window(OPEN_MENU) {
+                        self.move_pointer(at);
+                        self.mouse_button(RuffleMouseButton::Left, true);
+                        self.mouse_button(RuffleMouseButton::Left, false);
+                    }
+                }
+                gamepad::PadAction::Settings => self.open_settings(event_loop),
+            }
+        }
+        let (sx, sy) = self.gamepad.stick();
+        if (sx, sy) != (0.0, 0.0)
+            && let Some(r) = &self.running
+        {
+            let size = r.window.inner_size();
+            let step = STICK_SPEED * r.window.scale_factor() * dt;
+            let to = PhysicalPosition::new(
+                (r.mouse.x + f64::from(sx) * step).clamp(0.0, f64::from(size.width)),
+                (r.mouse.y + f64::from(sy) * step).clamp(0.0, f64::from(size.height)),
+            );
+            self.move_pointer(to);
+        }
+    }
+
     /// App shortcuts; returns whether the key was consumed.
-    fn shortcut(&mut self, event: &KeyEvent) -> bool {
+    fn shortcut(&mut self, event_loop: &ActiveEventLoop, event: &KeyEvent) -> bool {
         let Some(r) = &self.running else {
             return false;
         };
@@ -171,10 +306,12 @@ impl App {
         let state = r.modifiers.state();
         let command = state.control_key() || state.super_key();
         let fullscreen = r.window.fullscreen().is_some();
-        match &event.logical_key {
+        match event.logical_key.as_ref() {
             Key::Named(NamedKey::Escape) if fullscreen => self.set_fullscreen(false),
             Key::Named(NamedKey::F11) => self.set_fullscreen(!fullscreen),
             Key::Named(NamedKey::Enter) if state.alt_key() => self.set_fullscreen(!fullscreen),
+            Key::Named(NamedKey::F1) => self.open_settings(event_loop),
+            Key::Character(",") if command => self.open_settings(event_loop),
             Key::Named(NamedKey::ArrowUp) if command => self.change_volume(true),
             Key::Named(NamedKey::ArrowDown) if command => self.change_volume(false),
             Key::Character(c) if command && c.len() == 1 && c.as_bytes()[0].is_ascii_digit() => {
@@ -278,9 +415,19 @@ impl ApplicationHandler<AppEvent> for App {
         }
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        if let Some(w) = &mut self.settings_window
+            && w.id() == id
+        {
+            let english = self.host.borrow().english;
+            match w.handle(&event, &mut self.settings, english) {
+                Some(changes) => self.apply(changes),
+                None => self.settings_window = None,
+            }
+            return;
+        }
         if let WindowEvent::KeyboardInput { event, .. } = &event
-            && self.shortcut(event)
+            && self.shortcut(event_loop, event)
         {
             return;
         }
@@ -348,6 +495,8 @@ impl ApplicationHandler<AppEvent> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.poll_gamepad(event_loop);
+        let pad = self.gamepad.connected();
         let Some(r) = &mut self.running else { return };
         let now = Instant::now();
         if now >= r.next_frame {
@@ -364,7 +513,13 @@ impl ApplicationHandler<AppEvent> for App {
             }
         }
         r.executor.run();
-        event_loop.set_control_flow(ControlFlow::WaitUntil(r.next_frame));
+        // A connected controller needs polling faster than the 12 fps game.
+        let wake = if pad {
+            r.next_frame.min(now + std::time::Duration::from_millis(16))
+        } else {
+            r.next_frame
+        };
+        event_loop.set_control_flow(ControlFlow::WaitUntil(wake));
     }
 }
 
@@ -463,6 +618,9 @@ fn run() -> anyhow::Result<()> {
         host: Rc::new(RefCell::new(host)),
         settings,
         running: None,
+        settings_window: None,
+        gamepad: gamepad::Gamepad::new(),
+        last_poll: Instant::now(),
     };
     event_loop.run_app(&mut app)?;
     if let Some(music) = &app.host.borrow().music {
@@ -616,8 +774,6 @@ mod headless {
     const REMOTE_START: (f64, f64) = (412.0, 173.0);
     const REMOTE_SAVE: (f64, f64) = (380.0, 210.0);
     const REMOTE_LOAD: (f64, f64) = (414.0, 210.0);
-    /// The remote icon top right opens the menu during play.
-    const OPEN_MENU: (f64, f64) = (763.0, 39.0);
 
     fn read(path: PathBuf) -> String {
         String::from_utf8(std::fs::read(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"))).unwrap()
