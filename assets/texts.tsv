@@ -1,0 +1,10 @@
+lang	id	original	replacement
+# Built-in fixes. Overridden by <data dir>/texts.tsv; format in src/texts.rs.
+#
+# Typos in the 2001 script.
+cs		Vypadá to jako graffitti.	Vypadá to jako graffiti.
+cs		Hele, snad nechceš blekotat o tom, že na historická místa se graffitti nehodí	Hele, snad nechceš blekotat o tom, že na historická místa se graffiti nehodí
+#
+# Drawn text that never got an English version.
+en	2725	Konečně je vše jak má být!	Finally, everything is as it should be!
+en	909	Tento obchodník je hoden obchodovat kdykoli, kdekoli a s kýmkoli.	This merchant may trade anytime, anywhere and with anyone.

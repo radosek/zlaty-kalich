@@ -33,10 +33,6 @@ impl Game {
             swf: swf.to_vec(),
         })
     }
-
-    pub fn file(&self, name: &str) -> PathBuf {
-        find_in(&self.dir, name)
-    }
 }
 
 pub fn extract_swf(data: &[u8]) -> anyhow::Result<&[u8]> {

@@ -1,94 +1,47 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod game;
+mod host;
 mod keys;
 mod music;
+mod patch;
 mod save;
+mod settings;
+mod texts;
 mod ui;
 
 use anyhow::{Context, anyhow};
 use game::Game;
+use host::{AUTOSAVE_SLOT, AppEvent, Commands, Host, SlotNavigator};
 use music::Music;
-use ruffle_core::backend::navigator::{NullExecutor, NullNavigatorBackend};
+use ruffle_core::backend::navigator::NullExecutor;
 use ruffle_core::config::Letterbox;
-use ruffle_core::events::{MouseButton as RuffleMouseButton, MouseWheelDelta};
-use ruffle_core::external::FsCommandProvider;
+use ruffle_core::events::{
+    KeyDescriptor, KeyLocation, LogicalKey, MouseButton as RuffleMouseButton, MouseWheelDelta,
+    NamedKey as RuffleNamedKey, PhysicalKey,
+};
 use ruffle_core::tag_utils::SwfMovieData;
 use ruffle_core::{FloatDuration, Player, PlayerBuilder, PlayerEvent, ViewportDimensions};
 use ruffle_frontend_utils::backends::audio::CpalAudioBackend;
+use ruffle_render::quality::StageQuality;
 use ruffle_render_wgpu::backend::WgpuRenderBackend;
 use ruffle_render_wgpu::wgpu;
+use settings::{Quality, Settings};
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use texts::Texts;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{ElementState, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Fullscreen, Window, WindowId};
 
-const SAVE_FILE: &str = "kalich.sav";
-
-enum AppEvent {
-    Quit,
-    Fullscreen(bool),
-}
-
-/// Stands in for the projector's `exec` of `player.exe` and its own commands.
-struct Commands {
-    game_dir: PathBuf,
-    save_dir: PathBuf,
-    music: Option<Rc<Music>>,
-    events: EventLoopProxy<AppEvent>,
-}
-
-impl Commands {
-    fn player_exe(&self, args: &str) {
-        let params = save::param_str(args);
-        let params = &params[1.min(params.len())..];
-        match params {
-            [] => {
-                if let Some(music) = &self.music {
-                    music.stop();
-                }
-            }
-            [track] => {
-                if let Some(music) = &self.music {
-                    let path = game::find_in(&self.game_dir, track);
-                    if let Err(e) = music.play(&path) {
-                        tracing::error!("Couldn't play {track}: {e:#}");
-                    }
-                }
-            }
-            _ => {
-                let path = self.save_dir.join(SAVE_FILE);
-                if let Err(e) = std::fs::write(&path, save::encode(params)) {
-                    tracing::error!("Couldn't save to {}: {e}", path.display());
-                }
-            }
-        }
-    }
-}
-
-impl FsCommandProvider for Commands {
-    fn on_fs_command(&self, command: &str, args: &str) -> bool {
-        match command {
-            "exec" => self.player_exe(args),
-            "quit" => {
-                let _ = self.events.send_event(AppEvent::Quit);
-            }
-            "fullscreen" => {
-                let _ = self.events.send_event(AppEvent::Fullscreen(args == "true"));
-            }
-            // The projector's right-click menu; there is none here.
-            "showmenu" => {}
-            _ => return false,
-        }
-        true
-    }
-}
+const BEST_QUALITY: StageQuality = StageQuality::High8x8Linear;
+const VOLUME_STEP: u8 = 10;
 
 struct Running {
     window: Arc<Window>,
@@ -102,10 +55,9 @@ struct Running {
 }
 
 struct App {
-    game: Game,
-    save_dir: PathBuf,
-    events: EventLoopProxy<AppEvent>,
-    music: Option<Rc<Music>>,
+    swf: Vec<u8>,
+    host: Rc<RefCell<Host>>,
+    settings: Settings,
     running: Option<Running>,
 }
 
@@ -135,20 +87,16 @@ impl App {
         .map_err(|e| anyhow!("{e}"))?;
 
         let executor = NullExecutor::new();
-        let navigator = NullNavigatorBackend::with_base_path(&self.save_dir, &executor)?;
-
         let mut builder = PlayerBuilder::new()
             .with_renderer(renderer)
-            .with_navigator(navigator)
-            .with_fs_commands(Box::new(Commands {
-                game_dir: self.game.dir.clone(),
-                save_dir: self.save_dir.clone(),
-                music: self.music.clone(),
-                events: self.events.clone(),
-            }))
+            .with_navigator(SlotNavigator::new(self.host.clone(), &executor)?)
+            .with_fs_commands(Box::new(Commands(self.host.clone())))
             .with_ui(ui::Ui::new(window.clone()))
             .with_letterbox(Letterbox::On)
             .with_autoplay(true);
+        if self.settings.quality == Quality::Best {
+            builder = builder.with_quality(BEST_QUALITY);
+        }
         match CpalAudioBackend::new(None) {
             Ok(audio) => builder = builder.with_audio(audio),
             Err(e) => tracing::error!("No sound effects: {e}"),
@@ -157,9 +105,10 @@ impl App {
 
         // Relative URLs in the movie (loadVariables "kalich.sav") resolve
         // against the save directory.
-        let url = url::Url::from_file_path(self.save_dir.join("kalich.swf"))
+        let save_dir = self.host.borrow().save_dir.clone();
+        let url = url::Url::from_file_path(save_dir.join("kalich.swf"))
             .map_err(|()| anyhow!("bad save directory"))?;
-        let movie = SwfMovieData::from_data(&self.game.swf, url.into(), None, None)?;
+        let movie = SwfMovieData::from_data(&self.swf, url.into(), None, None)?;
         {
             let mut player = player.lock().unwrap();
             player.update(|uc| uc.set_root_movie(movie));
@@ -169,9 +118,12 @@ impl App {
                 scale_factor: window.scale_factor(),
             });
         }
+        if let Some(on) = self.settings.fullscreen {
+            window.set_fullscreen(on.then_some(Fullscreen::Borderless(None)));
+        }
 
         let now = Instant::now();
-        Ok(Running {
+        let running = Running {
             window,
             player,
             executor,
@@ -180,7 +132,89 @@ impl App {
             mouse: PhysicalPosition::new(0.0, 0.0),
             modifiers: Modifiers::default(),
             occluded: false,
-        })
+        };
+        self.update_title(&running);
+        Ok(running)
+    }
+
+    fn update_title(&self, running: &Running) {
+        let host = self.host.borrow();
+        let volume = self.settings.music_volume;
+        let title = match (host.english, host.slot) {
+            (false, AUTOSAVE_SLOT) => {
+                format!("Zlatý Kalich — automatická pozice · hudba {volume} %")
+            }
+            (false, slot) => format!("Zlatý Kalich — pozice {slot} · hudba {volume} %"),
+            (true, AUTOSAVE_SLOT) => format!("Zlatý Kalich — autosave · music {volume}%"),
+            (true, slot) => format!("Zlatý Kalich — slot {slot} · music {volume}%"),
+        };
+        running.window.set_title(&title);
+    }
+
+    fn set_fullscreen(&mut self, on: bool) {
+        if let Some(r) = &self.running {
+            r.window
+                .set_fullscreen(on.then_some(Fullscreen::Borderless(None)));
+        }
+        self.settings.fullscreen = Some(on);
+        self.settings.save();
+    }
+
+    /// App shortcuts; returns whether the key was consumed.
+    fn shortcut(&mut self, event: &KeyEvent) -> bool {
+        let Some(r) = &self.running else {
+            return false;
+        };
+        if event.state != ElementState::Pressed {
+            return false;
+        }
+        let state = r.modifiers.state();
+        let command = state.control_key() || state.super_key();
+        let fullscreen = r.window.fullscreen().is_some();
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape) if fullscreen => self.set_fullscreen(false),
+            Key::Named(NamedKey::F11) => self.set_fullscreen(!fullscreen),
+            Key::Named(NamedKey::Enter) if state.alt_key() => self.set_fullscreen(!fullscreen),
+            Key::Named(NamedKey::ArrowUp) if command => self.change_volume(true),
+            Key::Named(NamedKey::ArrowDown) if command => self.change_volume(false),
+            Key::Character(c) if command && c.len() == 1 && c.as_bytes()[0].is_ascii_digit() => {
+                let slot = c.as_bytes()[0] - b'0';
+                self.host.borrow_mut().slot = slot;
+                self.settings.slot = slot;
+                self.settings.save();
+            }
+            _ => return false,
+        }
+        if let Some(r) = &self.running {
+            self.update_title(r);
+        }
+        true
+    }
+
+    fn change_volume(&mut self, up: bool) {
+        let v = self.settings.music_volume;
+        self.settings.music_volume = if up {
+            v.saturating_add(VOLUME_STEP).min(100)
+        } else {
+            v.saturating_sub(VOLUME_STEP)
+        };
+        if let Some(music) = &self.host.borrow().music {
+            music.set_volume(f32::from(self.settings.music_volume) / 100.0);
+        }
+        self.settings.save();
+    }
+
+    /// Asks the game to save itself into the autosave slot.
+    fn autosave(&mut self) {
+        let Some(r) = &mut self.running else { return };
+        let key = KeyDescriptor {
+            physical_key: PhysicalKey::F13,
+            logical_key: LogicalKey::Named(RuffleNamedKey::F13),
+            key_location: KeyLocation::Standard,
+        };
+        r.send(PlayerEvent::KeyDown { key });
+        r.send(PlayerEvent::KeyUp { key });
+        self.host.borrow_mut().finish_autosave();
     }
 }
 
@@ -190,26 +224,7 @@ impl Running {
         self.executor.run();
     }
 
-    fn set_fullscreen(&self, on: bool) {
-        self.window
-            .set_fullscreen(on.then_some(Fullscreen::Borderless(None)));
-    }
-
     fn key(&mut self, event: KeyEvent) {
-        if event.state == ElementState::Pressed {
-            match event.logical_key {
-                Key::Named(NamedKey::Escape) if self.window.fullscreen().is_some() => {
-                    return self.set_fullscreen(false);
-                }
-                Key::Named(NamedKey::F11) => {
-                    return self.set_fullscreen(self.window.fullscreen().is_none());
-                }
-                Key::Named(NamedKey::Enter) if self.modifiers.state().alt_key() => {
-                    return self.set_fullscreen(self.window.fullscreen().is_none());
-                }
-                _ => {}
-            }
-        }
         let key = keys::winit_input_to_ruffle_key_descriptor(&event);
         match event.state {
             ElementState::Pressed => {
@@ -243,19 +258,39 @@ impl ApplicationHandler<AppEvent> for App {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AppEvent) {
         match event {
-            AppEvent::Quit => event_loop.exit(),
-            AppEvent::Fullscreen(on) => {
-                if let Some(running) = &self.running {
-                    running.set_fullscreen(on);
+            AppEvent::Quit => {
+                self.autosave();
+                event_loop.exit();
+            }
+            // An F11 choice overrides the game's own display option.
+            AppEvent::Fullscreen(on) if self.settings.fullscreen.is_none() => {
+                if let Some(r) = &self.running {
+                    r.window
+                        .set_fullscreen(on.then_some(Fullscreen::Borderless(None)));
+                }
+            }
+            AppEvent::Fullscreen(_) => {}
+            AppEvent::Title => {
+                if let Some(r) = &self.running {
+                    self.update_title(r);
                 }
             }
         }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+        if let WindowEvent::KeyboardInput { event, .. } = &event
+            && self.shortcut(event)
+        {
+            return;
+        }
+        if matches!(event, WindowEvent::CloseRequested) {
+            self.autosave();
+            event_loop.exit();
+            return;
+        }
         let Some(r) = &mut self.running else { return };
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
                 r.player
                     .lock()
@@ -318,6 +353,10 @@ impl ApplicationHandler<AppEvent> for App {
         if now >= r.next_frame {
             let mut player = r.player.lock().unwrap();
             player.tick(FloatDuration::from_std(now - r.last_tick));
+            // The game lowers quality from its options menu; keep it crisp.
+            if self.settings.quality == Quality::Best && player.quality() != BEST_QUALITY {
+                player.set_quality(BEST_QUALITY);
+            }
             r.last_tick = now;
             r.next_frame = now + player.time_til_next_frame();
             if player.needs_render() {
@@ -329,24 +368,22 @@ impl ApplicationHandler<AppEvent> for App {
     }
 }
 
-fn config_file() -> Option<PathBuf> {
-    Some(dirs::config_dir()?.join("zlaty-kalich").join("game-path.txt"))
-}
-
 /// CLI argument, then the remembered location, then the folder next to this
 /// binary, then ask.
-fn find_game() -> anyhow::Result<Game> {
-    if let Some(arg) = std::env::args_os().nth(1) {
-        let game = Game::open(Path::new(&arg))?;
-        remember(&game.dir);
+fn find_game(arg: Option<&Path>, settings: &mut Settings) -> anyhow::Result<Game> {
+    if let Some(arg) = arg {
+        let game = Game::open(arg)?;
+        settings.game_path = Some(game.dir.clone());
         return Ok(game);
     }
-    if let Some(saved) = config_file().and_then(|f| std::fs::read_to_string(f).ok())
-        && let Ok(game) = Game::open(Path::new(saved.trim()))
+    if let Some(saved) = &settings.game_path
+        && let Ok(game) = Game::open(saved)
     {
         return Ok(game);
     }
-    if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_owned))
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(Path::to_owned))
         && let Ok(game) = Game::open(&dir)
     {
         return Ok(game);
@@ -357,28 +394,15 @@ fn find_game() -> anyhow::Result<Game> {
         .pick_file()
         .context("no game selected")?;
     let game = Game::open(&picked)?;
-    remember(&game.dir);
+    settings.game_path = Some(game.dir.clone());
     Ok(game)
 }
 
-fn remember(dir: &Path) {
-    if let Some(file) = config_file() {
-        let _ = std::fs::create_dir_all(file.parent().unwrap());
-        let _ = std::fs::write(file, dir.to_string_lossy().as_bytes());
-    }
-}
-
-fn save_dir(game: &Game) -> anyhow::Result<PathBuf> {
+fn data_dir() -> anyhow::Result<PathBuf> {
     let dir = dirs::data_dir()
         .context("no data directory")?
         .join("zlaty-kalich");
     std::fs::create_dir_all(&dir)?;
-    // Carry over progress from the original install on first run.
-    let save = dir.join(SAVE_FILE);
-    let original = game.file(SAVE_FILE);
-    if !save.exists() && original.exists() {
-        std::fs::copy(original, save)?;
-    }
     Ok(dir)
 }
 
@@ -394,26 +418,50 @@ fn fatal(message: &str) {
 fn run() -> anyhow::Result<()> {
     // Flash 5 movies carry text in the system code page; the game was made
     // on Czech Windows. Ruffle otherwise assumes Windows-1252 (ř -> ø).
-    ruffle_core::swf::set_legacy_encoding(encoding_rs::WINDOWS_1250);
-    let game = find_game()?;
-    let save_dir = save_dir(&game)?;
-    let music = match Music::new() {
-        Ok(music) => Some(Rc::new(music)),
-        Err(e) => {
-            tracing::error!("No music: {e:#}");
-            None
-        }
-    };
+    swf::set_legacy_encoding(encoding_rs::WINDOWS_1250);
+
+    let mut args = std::env::args_os().skip(1).map(PathBuf::from);
+    let mut settings = Settings::load();
+    let first = args.next();
+    if first.as_deref() == Some(Path::new("--export-texts")) {
+        let out = args.next().context("usage: --export-texts FILE [GAME]")?;
+        let game = find_game(args.next().as_deref(), &mut settings)?;
+        std::fs::write(&out, texts::export(&game.swf)?)?;
+        println!("Wrote {}", out.display());
+        return Ok(());
+    }
+    let game = find_game(first.as_deref(), &mut settings)?;
+    settings.save();
+
+    let save_dir = data_dir()?;
+    host::migrate_saves(&save_dir, &game.dir)?;
+    let user_texts = std::fs::read_to_string(save_dir.join("texts.tsv")).ok();
+    let texts = Texts::load(user_texts.as_deref())?;
+    let swf = patch::patch(&game.swf, &texts.static_translations(), settings.hotspots)?;
+
+    let music = Music::new(
+        settings.soundfont.clone(),
+        f32::from(settings.music_volume) / 100.0,
+    )
+    .inspect_err(|e| tracing::error!("No music: {e:#}"))
+    .ok();
     let event_loop = EventLoop::<AppEvent>::with_user_event().build()?;
-    let mut app = App {
-        game,
+    let host = Host::new(
+        game.dir.clone(),
         save_dir,
-        events: event_loop.create_proxy(),
+        settings.slot,
         music,
+        texts,
+        event_loop.create_proxy(),
+    );
+    let mut app = App {
+        swf,
+        host: Rc::new(RefCell::new(host)),
+        settings,
         running: None,
     };
     event_loop.run_app(&mut app)?;
-    if let Some(music) = &app.music {
+    if let Some(music) = &app.host.borrow().music {
         music.stop();
     }
     Ok(())
@@ -422,8 +470,9 @@ fn run() -> anyhow::Result<()> {
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "warn,zlaty_kalich=info,symphonia_bundle_mp3=error".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                "warn,zlaty_kalich=info,symphonia_bundle_mp3=error,ruffle_render_wgpu=error".into()
+            }),
         )
         .init();
     if let Err(e) = run() {

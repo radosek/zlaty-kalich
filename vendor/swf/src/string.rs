@@ -1,9 +1,25 @@
 //! String type used by SWF files.
 
 pub use encoding_rs::{Encoding, SHIFT_JIS, UTF_8, WINDOWS_1252};
-use std::{borrow::Cow, fmt, sync::OnceLock};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    fmt,
+    sync::{Arc, OnceLock, RwLock},
+};
 
 static LEGACY_ENCODING: OnceLock<&'static Encoding> = OnceLock::new();
+
+/// Raw SWF string bytes -> replacement text, consulted on every decode.
+pub type TextOverrides = HashMap<Vec<u8>, String>;
+
+static TEXT_OVERRIDES: RwLock<Option<Arc<TextOverrides>>> = RwLock::new(None);
+
+/// Replaces strings as the player decodes them (actions, text fields, labels),
+/// so text can be edited without re-linking bytecode.
+pub fn set_text_overrides(overrides: Option<Arc<TextOverrides>>) {
+    *TEXT_OVERRIDES.write().unwrap() = overrides;
+}
 
 /// Sets the code page used for SWF5 and older, which Flash Player took from
 /// the system's ANSI code page. Defaults to Windows-1252. Only the first call
@@ -223,6 +239,11 @@ impl SwfStr {
     /// ```
     #[inline]
     pub fn to_str_lossy(&self, encoding: &'static Encoding) -> Cow<'_, str> {
+        if let Some(overrides) = TEXT_OVERRIDES.read().unwrap().as_deref()
+            && let Some(text) = overrides.get(&self.string)
+        {
+            return Cow::Owned(text.clone());
+        }
         encoding.decode_without_bom_handling(&self.string).0
     }
 

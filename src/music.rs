@@ -16,6 +16,8 @@ static SOUNDFONT: &[u8] = include_bytes!("../assets/GeneralUser-GS.sf2");
 struct State {
     sequencer: Option<MidiFileSequencer>,
     current: Option<PathBuf>,
+    /// 0.0–1.0.
+    volume: f32,
 }
 
 pub struct Music {
@@ -26,7 +28,8 @@ pub struct Music {
 }
 
 impl Music {
-    pub fn new() -> anyhow::Result<Self> {
+    /// `custom_soundfont` replaces the bundled GeneralUser GS bank.
+    pub fn new(custom_soundfont: Option<PathBuf>, volume: f32) -> anyhow::Result<Self> {
         let device = cpal::default_host()
             .default_output_device()
             .ok_or_else(|| anyhow!("no audio output device"))?;
@@ -35,6 +38,7 @@ impl Music {
         let state = Arc::new(Mutex::new(State {
             sequencer: None,
             current: None,
+            volume,
         }));
 
         let stream = match config.sample_format() {
@@ -50,7 +54,20 @@ impl Music {
         let soundfont = Arc::new(OnceLock::new());
         let slot = soundfont.clone();
         std::thread::spawn(move || {
-            match SoundFont::new(&mut Cursor::new(SOUNDFONT)) {
+            let custom = custom_soundfont.and_then(|path| match std::fs::read(&path) {
+                Ok(bytes) => match SoundFont::new(&mut Cursor::new(bytes)) {
+                    Ok(sf) => Some(sf),
+                    Err(e) => {
+                        tracing::error!("{}: {e}; using the bundled soundfont", path.display());
+                        None
+                    }
+                },
+                Err(e) => {
+                    tracing::error!("{}: {e}; using the bundled soundfont", path.display());
+                    None
+                }
+            });
+            match custom.map_or_else(|| SoundFont::new(&mut Cursor::new(SOUNDFONT)), Ok) {
                 Ok(sf) => {
                     let _ = slot.set(Arc::new(sf));
                 }
@@ -87,6 +104,10 @@ impl Music {
         Ok(())
     }
 
+    pub fn set_volume(&self, volume: f32) {
+        self.state.lock().unwrap().volume = volume.clamp(0.0, 1.0);
+    }
+
     pub fn stop(&self) {
         let mut state = self.state.lock().unwrap();
         state.sequencer = None;
@@ -108,16 +129,19 @@ fn build_stream<T: SizedSample + FromSample<f32>>(
             let frames = out.len() / channels;
             left.resize(frames, 0.0);
             right.resize(frames, 0.0);
-            match state.lock().unwrap().sequencer.as_mut() {
+            let mut state = state.lock().unwrap();
+            let volume = state.volume;
+            match state.sequencer.as_mut() {
                 Some(sequencer) => sequencer.render(&mut left, &mut right),
                 None => {
                     left.fill(0.0);
                     right.fill(0.0);
                 }
             }
+            drop(state);
             for (i, frame) in out.chunks_mut(channels).enumerate() {
                 for (c, sample) in frame.iter_mut().enumerate() {
-                    let v = if c % 2 == 0 { left[i] } else { right[i] };
+                    let v = volume * if c % 2 == 0 { left[i] } else { right[i] };
                     *sample = T::from_sample(v);
                 }
             }
