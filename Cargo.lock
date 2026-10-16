@@ -492,7 +492,7 @@ dependencies = [
  "quote",
  "rascal",
  "regex",
- "swf 0.3.0 (git+https://github.com/ruffle-rs/ruffle?rev=387ea68a46891b28e1579bc53725263396b4be38)",
+ "swf 0.3.0",
  "walkdir",
 ]
 
@@ -3597,7 +3597,7 @@ dependencies = [
  "regress",
  "ruffle_macros",
  "ruffle_wstr",
- "swf 0.3.0 (git+https://github.com/ruffle-rs/ruffle?rev=387ea68a46891b28e1579bc53725263396b4be38)",
+ "swf 0.3.0",
  "thiserror 2.0.18",
  "tracing",
  "url",
@@ -3653,7 +3653,7 @@ dependencies = [
  "serde_json",
  "slotmap",
  "smallvec",
- "swf 0.3.0 (git+https://github.com/ruffle-rs/ruffle?rev=387ea68a46891b28e1579bc53725263396b4be38)",
+ "swf 0.3.0",
  "symphonia",
  "thiserror 2.0.18",
  "tracing",
@@ -3717,7 +3717,7 @@ dependencies = [
  "png",
  "ruffle_wstr",
  "smallvec",
- "swf 0.3.0 (git+https://github.com/ruffle-rs/ruffle?rev=387ea68a46891b28e1579bc53725263396b4be38)",
+ "swf 0.3.0",
  "thiserror 2.0.18",
  "tracing",
  "wgpu",
@@ -3740,7 +3740,7 @@ dependencies = [
  "naga-pixelbender",
  "ruffle_render",
  "smallvec",
- "swf 0.3.0 (git+https://github.com/ruffle-rs/ruffle?rev=387ea68a46891b28e1579bc53725263396b4be38)",
+ "swf 0.3.0",
  "tracing",
  "web-sys",
  "wgpu",
@@ -3754,7 +3754,7 @@ source = "git+https://github.com/ruffle-rs/ruffle?rev=387ea68a46891b28e1579bc537
 dependencies = [
  "ruffle_render",
  "slotmap",
- "swf 0.3.0 (git+https://github.com/ruffle-rs/ruffle?rev=387ea68a46891b28e1579bc53725263396b4be38)",
+ "swf 0.3.0",
  "thiserror 2.0.18",
 ]
 
@@ -4170,8 +4170,6 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "swf"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1840721af70281567fdcbbf16e81b297db77d695c7b4a64860b18da15bb401a"
 dependencies = [
  "bitflags 2.13.2",
  "bitstream-io",
@@ -4188,7 +4186,8 @@ dependencies = [
 [[package]]
 name = "swf"
 version = "0.3.0"
-source = "git+https://github.com/ruffle-rs/ruffle?rev=387ea68a46891b28e1579bc53725263396b4be38#387ea68a46891b28e1579bc53725263396b4be38"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1840721af70281567fdcbbf16e81b297db77d695c7b4a64860b18da15bb401a"
 dependencies = [
  "bitflags 2.13.2",
  "bitstream-io",
@@ -5892,6 +5891,7 @@ dependencies = [
  "anyhow",
  "cpal",
  "dirs",
+ "encoding_rs",
  "rfd",
  "ruffle_core",
  "ruffle_frontend_utils",

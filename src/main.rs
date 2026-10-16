@@ -98,6 +98,7 @@ struct Running {
     next_frame: Instant,
     mouse: PhysicalPosition<f64>,
     modifiers: Modifiers,
+    occluded: bool,
 }
 
 struct App {
@@ -178,6 +179,7 @@ impl App {
             next_frame: now,
             mouse: PhysicalPosition::new(0.0, 0.0),
             modifiers: Modifiers::default(),
+            occluded: false,
         })
     }
 }
@@ -265,7 +267,8 @@ impl ApplicationHandler<AppEvent> for App {
                     });
                 r.window.request_redraw();
             }
-            WindowEvent::RedrawRequested => {
+            WindowEvent::Occluded(occluded) => r.occluded = occluded,
+            WindowEvent::RedrawRequested if !r.occluded => {
                 r.player.lock().unwrap().render();
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -389,6 +392,9 @@ fn fatal(message: &str) {
 }
 
 fn run() -> anyhow::Result<()> {
+    // Flash 5 movies carry text in the system code page; the game was made
+    // on Czech Windows. Ruffle otherwise assumes Windows-1252 (ř -> ø).
+    ruffle_core::swf::set_legacy_encoding(encoding_rs::WINDOWS_1250);
     let game = find_game()?;
     let save_dir = save_dir(&game)?;
     let music = match Music::new() {
@@ -417,7 +423,7 @@ fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "warn,zlaty_kalich=info".into()),
+                .unwrap_or_else(|_| "warn,zlaty_kalich=info,symphonia_bundle_mp3=error".into()),
         )
         .init();
     if let Err(e) = run() {
