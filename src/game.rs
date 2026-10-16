@@ -21,11 +21,7 @@ impl Game {
     /// (`32-ZKinstall.exe`), which is unpacked into `install_dir` first.
     pub fn open_or_install(path: &Path, install_dir: &Path) -> anyhow::Result<Self> {
         if path.is_file() && is_installer(path)? {
-            std::fs::create_dir_all(install_dir)?;
-            unrar_ng::Archive::new(path)
-                .open_for_processing()
-                .and_then(|archive| archive.extract_all(install_dir))
-                .map_err(|e| anyhow!("unpacking {}: {e}", path.display()))?;
+            unpack_installer(path, install_dir)?;
             return Self::open(install_dir);
         }
         Self::open(path)
@@ -76,6 +72,48 @@ pub fn extract_swf(data: &[u8]) -> anyhow::Result<&[u8]> {
     Ok(swf)
 }
 
+/// Files the 2002 installer contains; anything else in an archive is skipped.
+const INSTALLER_EXTENSIONS: [&str; 3] = ["exe", "mid", "sav"];
+const MAX_ENTRY_BYTES: u64 = 64 << 20;
+const MAX_ENTRIES: usize = 64;
+
+/// Extracts the installer's top-level game files only. Each destination is
+/// built here from a bare file name, so entry names can't escape `dest`.
+fn unpack_installer(installer: &Path, dest: &Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(dest)?;
+    let err = |e| anyhow!("unpacking {}: {e}", installer.display());
+    let mut cursor = unrar_ng::Archive::new(installer)
+        .open_for_processing()
+        .map_err(err)?;
+    for _ in 0..MAX_ENTRIES {
+        let Some(entry) = cursor.read_header().map_err(err)? else {
+            return Ok(());
+        };
+        let header = entry.entry();
+        let target = safe_name(&header.filename)
+            .filter(|_| header.is_file() && header.unpacked_size <= MAX_ENTRY_BYTES)
+            .map(|name| dest.join(name));
+        cursor = match target {
+            Some(target) => entry.extract_to(target).map_err(err)?,
+            None => {
+                tracing::warn!("Skipping installer entry {:?}", header.filename);
+                entry.skip().map_err(err)?
+            }
+        };
+    }
+    bail!("{} has too many entries for the game installer", installer.display())
+}
+
+/// A plain top-level file name with an expected extension, or nothing.
+fn safe_name(name: &Path) -> Option<&std::ffi::OsStr> {
+    let mut parts = name.components();
+    let (Some(std::path::Component::Normal(file)), None) = (parts.next(), parts.next()) else {
+        return None;
+    };
+    let ext = Path::new(file).extension()?.to_str()?.to_ascii_lowercase();
+    INSTALLER_EXTENSIONS.contains(&ext.as_str()).then_some(file)
+}
+
 fn is_installer(path: &Path) -> anyhow::Result<bool> {
     let data = std::fs::read(path)?;
     Ok(extract_swf(&data).is_err() && data.windows(RAR_MAGIC.len()).any(|w| w == RAR_MAGIC))
@@ -121,6 +159,16 @@ mod tests {
         let game = Game::open_or_install(Path::new(&installer), dir.path()).unwrap();
         assert!(game.swf.starts_with(b"FWS"));
         assert!(find_case_insensitive(dir.path(), "menu.mid").is_some());
+    }
+
+    #[test]
+    fn only_plain_game_files_are_unpacked() {
+        assert!(safe_name(Path::new("menu.mid")).is_some());
+        assert!(safe_name(Path::new("ZlatyKalich.EXE")).is_some());
+        assert!(safe_name(Path::new("../evil.exe")).is_none());
+        assert!(safe_name(Path::new("/etc/evil.sav")).is_none());
+        assert!(safe_name(Path::new("sub/menu.mid")).is_none());
+        assert!(safe_name(Path::new("run.sh")).is_none());
     }
 
     #[test]
