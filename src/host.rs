@@ -18,7 +18,6 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 use url::{ParseError, Url};
-use winit::event_loop::EventLoopProxy;
 
 /// File name the movie saves to and loads from.
 pub const SAVE_FILE: &str = "kalich.sav";
@@ -40,7 +39,7 @@ pub struct Host {
     pub texts: Texts,
     /// Set by the host clip just before an autosave's `savegame()`.
     autosave_next: bool,
-    events: EventLoopProxy<AppEvent>,
+    events: Box<dyn Fn(AppEvent)>,
 }
 
 impl Host {
@@ -50,7 +49,7 @@ impl Host {
         slot: u8,
         music: Option<Music>,
         texts: Texts,
-        events: EventLoopProxy<AppEvent>,
+        events: impl Fn(AppEvent) + 'static,
     ) -> Self {
         swf::set_text_overrides(texts.overrides(false));
         Self {
@@ -61,7 +60,7 @@ impl Host {
             music,
             texts,
             autosave_next: false,
-            events,
+            events: Box::new(events),
         }
     }
 
@@ -116,7 +115,7 @@ impl Host {
         } else if let Some(value) = args.strip_prefix("english=") {
             self.english = value == "1";
             swf::set_text_overrides(self.texts.overrides(self.english));
-            let _ = self.events.send_event(AppEvent::Title);
+            (self.events)(AppEvent::Title);
         }
     }
 }
@@ -148,10 +147,10 @@ impl FsCommandProvider for Commands {
             "exec" => host.player_exe(args),
             patch::host::COMMAND => host.host_command(args),
             "quit" => {
-                let _ = host.events.send_event(AppEvent::Quit);
+                (host.events)(AppEvent::Quit);
             }
             "fullscreen" => {
-                let _ = host.events.send_event(AppEvent::Fullscreen(args == "true"));
+                (host.events)(AppEvent::Fullscreen(args == "true"));
             }
             // The projector's right-click menu; there is none here.
             "showmenu" => {}

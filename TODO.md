@@ -1,9 +1,9 @@
 # TODO
 
 ## Verify by playthrough
-- [ ] 1. Save drops inventory beyond 16 slots? Check max `itembar` length, widen format compatibly.
-- [ ] 2. Loading a save restores `english` language choice correctly.
-- [ ] 3. Music never doubles/restarts on scene changes.
+- [x] 1. Save drops inventory beyond 16 slots? No: UI has 16 slots (m1–m16), save holds 16. The `m17` warning is a harmless off-by-one in frame 1984/1985 loops.
+- [x] 2. Loading a save restores `english` language choice correctly. (headless_save_load_autosave)
+- [x] 3. Music never doubles/restarts on scene changes. (Same track requested again keeps playing; the game asks twice for menu.mid.)
 - [ ] 4. Ruffle Flash 5 quirks: dead hotspots, broken animations, stuck items — patch AS where needed.
 
 ## Easy improvements
@@ -15,7 +15,7 @@
 
 ## Distribution
 - [ ] 10. Release builds: macOS universal .app, Windows .exe, Linux AppImage, web build.
-- [ ] 11. Import straight from `32-ZKinstall.exe` (RAR SFX) without unar.
+- [x] 11. Import straight from `32-ZKinstall.exe` (RAR SFX) without unar.
 
 ## Content
 - [x] 12. Measure and complete the English translation. (Script text was 100% bilingual; 2 drawn texts added.)

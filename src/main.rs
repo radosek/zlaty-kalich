@@ -368,11 +368,17 @@ impl ApplicationHandler<AppEvent> for App {
     }
 }
 
-/// CLI argument, then the remembered location, then the folder next to this
+/// Where an installer given instead of the game gets unpacked.
+fn install_dir() -> anyhow::Result<PathBuf> {
+    Ok(data_dir()?.join("game"))
+}
+
+/// CLI argument (game, its folder, or the original installer), then the
+/// remembered location, then the folder next to this
 /// binary, then ask.
 fn find_game(arg: Option<&Path>, settings: &mut Settings) -> anyhow::Result<Game> {
     if let Some(arg) = arg {
-        let game = Game::open(arg)?;
+        let game = Game::open_or_install(arg, &install_dir()?)?;
         settings.game_path = Some(game.dir.clone());
         return Ok(game);
     }
@@ -389,11 +395,11 @@ fn find_game(arg: Option<&Path>, settings: &mut Settings) -> anyhow::Result<Game
         return Ok(game);
     }
     let picked = rfd::FileDialog::new()
-        .set_title("Najdi ZlatyKalich.exe")
+        .set_title("Najdi ZlatyKalich.exe nebo instalačku 32-ZKinstall.exe")
         .add_filter("Zlatý Kalich", &["exe", "EXE"])
         .pick_file()
         .context("no game selected")?;
-    let game = Game::open(&picked)?;
+    let game = Game::open_or_install(&picked, &install_dir()?)?;
     settings.game_path = Some(game.dir.clone());
     Ok(game)
 }
@@ -446,14 +452,12 @@ fn run() -> anyhow::Result<()> {
     .inspect_err(|e| tracing::error!("No music: {e:#}"))
     .ok();
     let event_loop = EventLoop::<AppEvent>::with_user_event().build()?;
-    let host = Host::new(
-        game.dir.clone(),
-        save_dir,
-        settings.slot,
-        music,
-        texts,
-        event_loop.create_proxy(),
-    );
+    let host = Host::new(game.dir.clone(), save_dir, settings.slot, music, texts, {
+        let proxy = event_loop.create_proxy();
+        move |event| {
+            let _ = proxy.send_event(event);
+        }
+    });
     let mut app = App {
         swf,
         host: Rc::new(RefCell::new(host)),
@@ -483,26 +487,75 @@ fn main() {
 
 #[cfg(test)]
 mod headless {
-    //! Plays the real game offscreen and saves PNGs, for checking visual
-    //! changes without a window:
+    //! Plays the real game offscreen through the real host (slots, saves,
+    //! fscommands) and saves PNGs, without a window:
     //! `ZK_GAME=/path/to/game ZK_SHOTS=/tmp/out cargo test headless -- --ignored`
     use super::*;
-    use ruffle_core::backend::navigator::NullNavigatorBackend;
     use ruffle_core::events::MouseButton;
     use ruffle_render_wgpu::target::TextureTarget;
     use std::any::Any;
 
-    const FRAME: f64 = 1000.0 / 12.0;
-
-    struct Headless {
+    pub struct Headless {
+        pub host: Rc<RefCell<Host>>,
         player: Arc<Mutex<Player>>,
         executor: NullExecutor,
         out: PathBuf,
     }
 
     impl Headless {
-        fn run(&mut self, seconds: f64) {
-            for _ in 0..(seconds * 1000.0 / FRAME) as u32 {
+        pub fn new(saves: &Path, hotspots: settings::Hotspots) -> Self {
+            swf::set_legacy_encoding(encoding_rs::WINDOWS_1250);
+            let game = Game::open(Path::new(&std::env::var("ZK_GAME").unwrap())).unwrap();
+            let out = PathBuf::from(std::env::var("ZK_SHOTS").unwrap());
+            std::fs::create_dir_all(&out).unwrap();
+            host::migrate_saves(saves, &game.dir).unwrap();
+            let texts = Texts::load(None).unwrap();
+            let swf = patch::patch(&game.swf, &texts.static_translations(), hotspots).unwrap();
+            let host = Rc::new(RefCell::new(Host::new(
+                game.dir.clone(),
+                saves.to_owned(),
+                1,
+                None,
+                texts,
+                |_| {},
+            )));
+
+            let renderer = WgpuRenderBackend::for_offscreen(
+                (800, 600),
+                wgpu::Backends::PRIMARY,
+                wgpu::PowerPreference::HighPerformance,
+            )
+            .unwrap();
+            let executor = NullExecutor::new();
+            let player = PlayerBuilder::new()
+                .with_renderer(renderer)
+                .with_navigator(SlotNavigator::new(host.clone(), &executor).unwrap())
+                .with_fs_commands(Box::new(Commands(host.clone())))
+                .with_quality(BEST_QUALITY)
+                .with_load_behavior(ruffle_core::LoadBehavior::Blocking)
+                .with_autoplay(true)
+                .build();
+            let url = url::Url::from_file_path(saves.join("kalich.swf")).unwrap();
+            let movie = SwfMovieData::from_data(&swf, url.into(), None, None).unwrap();
+            {
+                let mut p = player.lock().unwrap();
+                p.update(|uc| uc.set_root_movie(movie));
+                p.set_viewport_dimensions(ViewportDimensions {
+                    width: 800,
+                    height: 600,
+                    scale_factor: 1.0,
+                });
+            }
+            Self {
+                host,
+                player,
+                executor,
+                out,
+            }
+        }
+
+        pub fn run(&mut self, seconds: f64) {
+            for _ in 0..(seconds * 12.0) as u32 {
                 // `tick` would wait on stream sounds, which need an audio device.
                 self.player.lock().unwrap().run_frame();
                 self.executor.run();
@@ -515,8 +568,12 @@ mod headless {
             self.run(0.2);
         }
 
-        fn click(&mut self, x: f64, y: f64) {
+        pub fn hover(&mut self, x: f64, y: f64) {
             self.send(PlayerEvent::MouseMove { x, y });
+        }
+
+        pub fn click(&mut self, x: f64, y: f64) {
+            self.hover(x, y);
             self.send(PlayerEvent::MouseDown {
                 x,
                 y,
@@ -530,7 +587,18 @@ mod headless {
             });
         }
 
-        fn shot(&self, name: &str) {
+        pub fn autosave(&mut self) {
+            let key = KeyDescriptor {
+                physical_key: PhysicalKey::F13,
+                logical_key: LogicalKey::Named(RuffleNamedKey::F13),
+                key_location: KeyLocation::Standard,
+            };
+            self.send(PlayerEvent::KeyDown { key });
+            self.send(PlayerEvent::KeyUp { key });
+            self.host.borrow_mut().finish_autosave();
+        }
+
+        pub fn shot(&self, name: &str) {
             let mut p = self.player.lock().unwrap();
             p.render();
             let renderer =
@@ -541,67 +609,125 @@ mod headless {
         }
     }
 
+    // Stage coordinates of the menus, found from the real game.
+    const SKIP: (f64, f64) = (742.0, 57.0);
+    const CZECH: (f64, f64) = (223.0, 402.0);
+    const ENGLISH: (f64, f64) = (575.0, 375.0);
+    const REMOTE_START: (f64, f64) = (412.0, 173.0);
+    const REMOTE_SAVE: (f64, f64) = (380.0, 210.0);
+    const REMOTE_LOAD: (f64, f64) = (414.0, 210.0);
+    /// The remote icon top right opens the menu during play.
+    const OPEN_MENU: (f64, f64) = (763.0, 39.0);
+
+    fn read(path: PathBuf) -> String {
+        String::from_utf8(std::fs::read(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"))).unwrap()
+    }
+
+    fn field<'a>(save: &'a str, key: &str) -> &'a str {
+        let start = save.find(&format!("&{key}=")).unwrap() + key.len() + 2;
+        let rest = &save[start..];
+        &rest[..rest.find('&').unwrap_or(rest.len())]
+    }
+
+    /// Language screen -> main menu -> new game -> first scene.
+    fn new_game(h: &mut Headless, language: (f64, f64)) {
+        h.run(3.0);
+        h.click(SKIP.0, SKIP.1);
+        h.run(5.0);
+        h.click(language.0, language.1);
+        h.run(5.0);
+        h.click(SKIP.0, SKIP.1);
+        h.run(10.0);
+        h.click(REMOTE_START.0, REMOTE_START.1);
+        h.run(20.0);
+        h.click(SKIP.0, SKIP.1);
+        h.run(20.0);
+    }
+
     #[test]
     #[ignore]
     fn headless_hotspots() {
-        swf::set_legacy_encoding(encoding_rs::WINDOWS_1250);
-        let game = Game::open(Path::new(&std::env::var("ZK_GAME").unwrap())).unwrap();
-        let out = PathBuf::from(std::env::var("ZK_SHOTS").unwrap());
-        std::fs::create_dir_all(&out).unwrap();
         let saves = tempfile::tempdir().unwrap();
-        std::fs::copy(
-            game::find_in(&game.dir, host::SAVE_FILE),
-            saves.path().join(host::SAVE_FILE),
-        )
-        .unwrap();
-        let swf = patch::patch(&game.swf, &[], settings::Hotspots::Always).unwrap();
+        let mut h = Headless::new(saves.path(), settings::Hotspots::Always);
+        new_game(&mut h, CZECH);
+        h.shot("hotspots-scene");
+    }
 
-        let renderer = WgpuRenderBackend::for_offscreen(
-            (800, 600),
-            wgpu::Backends::PRIMARY,
-            wgpu::PowerPreference::HighPerformance,
-        )
-        .unwrap();
-        let executor = NullExecutor::new();
-        let player = PlayerBuilder::new()
-            .with_renderer(renderer)
-            .with_navigator(NullNavigatorBackend::with_base_path(saves.path(), &executor).unwrap())
-            .with_quality(BEST_QUALITY)
-            .with_load_behavior(ruffle_core::LoadBehavior::Blocking)
-            .with_autoplay(true)
-            .build();
-        let url = url::Url::from_file_path(saves.path().join("kalich.swf")).unwrap();
-        let movie = SwfMovieData::from_data(&swf, url.into(), None, None).unwrap();
+    #[test]
+    #[ignore]
+    fn headless_save_load_autosave() {
+        let saves = tempfile::tempdir().unwrap();
         {
-            let mut p = player.lock().unwrap();
-            p.update(|uc| uc.set_root_movie(movie));
-            p.set_viewport_dimensions(ViewportDimensions {
-                width: 800,
-                height: 600,
-                scale_factor: 1.0,
-            });
+            let mut h = Headless::new(saves.path(), settings::Hotspots::Off);
+            new_game(&mut h, ENGLISH);
+            assert!(h.host.borrow().english, "game reports English");
+
+            h.autosave();
+            let auto = read(saves.path().join("autosave.sav"));
+            assert_eq!(field(&auto, "english"), "1");
+            let frame: u32 = field(&auto, "cf").parse().unwrap();
+            assert!(
+                (1951..=1991).contains(&frame),
+                "autosave in a scene, got {frame}"
+            );
+
+            h.host.borrow_mut().slot = 2;
+            h.click(OPEN_MENU.0, OPEN_MENU.1);
+            h.run(2.0);
+            h.click(REMOTE_SAVE.0, REMOTE_SAVE.1);
+            h.run(2.0);
+            assert_eq!(
+                field(&read(saves.path().join("slot2.sav")), "cf"),
+                frame.to_string()
+            );
+            h.shot("saved");
         }
-        let mut h = Headless {
-            player,
-            executor,
-            out,
-        };
+        {
+            // Fresh start in Czech, load the English autosave.
+            let mut h = Headless::new(saves.path(), settings::Hotspots::Off);
+            h.host.borrow_mut().slot = host::AUTOSAVE_SLOT;
+            h.run(3.0);
+            h.click(SKIP.0, SKIP.1);
+            h.run(5.0);
+            h.click(CZECH.0, CZECH.1);
+            h.run(5.0);
+            h.click(SKIP.0, SKIP.1);
+            h.run(10.0);
+            assert!(!h.host.borrow().english);
+            h.click(REMOTE_LOAD.0, REMOTE_LOAD.1);
+            h.run(10.0);
+            h.shot("loaded");
+            assert!(
+                h.host.borrow().english,
+                "loading restores the saved language"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn headless_menu_map() {
+        let saves = tempfile::tempdir().unwrap();
+        let mut h = Headless::new(saves.path(), settings::Hotspots::Always);
         h.run(3.0);
-        h.click(742.0, 57.0); // skip intro
+        h.click(SKIP.0, SKIP.1);
         h.run(5.0);
-        h.shot("1-language");
-        h.click(223.0, 402.0); // ČESKY
-        h.run(20.0);
-        h.shot("2-menu");
-        h.click(394.0, 524.0); // POKRAČOVAT VE HŘE
+        h.click(CZECH.0, CZECH.1);
         h.run(5.0);
-        h.click(742.0, 57.0); // skip story
-        h.run(15.0);
-        h.shot("3-menu");
-        h.click(412.0, 173.0); // remote: green = start
-        h.run(20.0);
-        h.click(742.0, 57.0); // skip story
-        h.run(20.0);
-        h.shot("4-scene");
+        h.click(SKIP.0, SKIP.1);
+        h.run(10.0);
+        for (i, (x, y)) in [
+            (380.0, 210.0),
+            (414.0, 210.0),
+            (380.0, 280.0),
+            (414.0, 280.0),
+            (412.0, 318.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            h.hover(x, y);
+            h.shot(&format!("menu-hover-{i}"));
+        }
     }
 }

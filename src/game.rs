@@ -13,7 +13,24 @@ pub struct Game {
     pub swf: Vec<u8>,
 }
 
+/// RAR block signature; the 2002 installer is a RAR self-extractor.
+const RAR_MAGIC: &[u8] = b"Rar!\x1a\x07";
+
 impl Game {
+    /// Like [`Game::open`], but also accepts the original installer
+    /// (`32-ZKinstall.exe`), which is unpacked into `install_dir` first.
+    pub fn open_or_install(path: &Path, install_dir: &Path) -> anyhow::Result<Self> {
+        if path.is_file() && is_installer(path)? {
+            std::fs::create_dir_all(install_dir)?;
+            unrar_ng::Archive::new(path)
+                .open_for_processing()
+                .and_then(|archive| archive.extract_all(install_dir))
+                .map_err(|e| anyhow!("unpacking {}: {e}", path.display()))?;
+            return Self::open(install_dir);
+        }
+        Self::open(path)
+    }
+
     /// `path` is the projector itself or the folder holding it.
     pub fn open(path: &Path) -> anyhow::Result<Self> {
         let exe = if path.is_dir() {
@@ -59,6 +76,11 @@ pub fn extract_swf(data: &[u8]) -> anyhow::Result<&[u8]> {
     Ok(swf)
 }
 
+fn is_installer(path: &Path) -> anyhow::Result<bool> {
+    let data = std::fs::read(path)?;
+    Ok(extract_swf(&data).is_err() && data.windows(RAR_MAGIC.len()).any(|w| w == RAR_MAGIC))
+}
+
 /// Game files keep their DOS-era casing on case-sensitive filesystems.
 pub fn find_in(dir: &Path, name: &str) -> PathBuf {
     find_case_insensitive(dir, name).unwrap_or_else(|| dir.join(name))
@@ -88,6 +110,17 @@ mod tests {
         exe.extend_from_slice(&PROJECTOR_MAGIC.to_le_bytes());
         exe.extend_from_slice(&(swf.len() as u32).to_le_bytes());
         assert_eq!(extract_swf(&exe).unwrap(), swf);
+    }
+
+    #[test]
+    #[ignore]
+    fn unpacks_original_installer() {
+        // ZK_INSTALLER=/path/to/32-ZKinstall.exe cargo test -- --ignored
+        let installer = std::env::var("ZK_INSTALLER").expect("set ZK_INSTALLER");
+        let dir = tempfile::tempdir().unwrap();
+        let game = Game::open_or_install(Path::new(&installer), dir.path()).unwrap();
+        assert!(game.swf.starts_with(b"FWS"));
+        assert!(find_case_insensitive(dir.path(), "menu.mid").is_some());
     }
 
     #[test]
