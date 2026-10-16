@@ -13,15 +13,7 @@ pub enum Quality {
     Game,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
-#[serde(rename_all = "kebab-case")]
-pub enum Hotspots {
-    /// Highlight clickable areas while Space is held.
-    #[default]
-    HoldSpace,
-    Always,
-    Off,
-}
+pub use kalich_core::patch::Hotspots;
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]

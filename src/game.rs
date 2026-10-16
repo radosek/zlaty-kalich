@@ -1,12 +1,10 @@
 //! Locating the user's copy of the game and pulling the movie out of it.
 
 use anyhow::{Context, anyhow, bail};
+use kalich_core::extract_swf;
 use std::path::{Path, PathBuf};
 
 pub const PROJECTOR: &str = "ZlatyKalich.exe";
-
-/// Trailer the Flash projector appends after the embedded SWF.
-const PROJECTOR_MAGIC: u32 = 0xFA12_3456;
 
 pub struct Game {
     pub dir: PathBuf,
@@ -47,29 +45,6 @@ impl Game {
             swf: swf.to_vec(),
         })
     }
-}
-
-pub fn extract_swf(data: &[u8]) -> anyhow::Result<&[u8]> {
-    if data.starts_with(b"FWS") || data.starts_with(b"CWS") {
-        return Ok(data);
-    }
-    let Some(trailer) = data.len().checked_sub(8).map(|at| &data[at..]) else {
-        bail!("file too small");
-    };
-    let magic = u32::from_le_bytes(trailer[..4].try_into()?);
-    let len = u32::from_le_bytes(trailer[4..].try_into()?) as usize;
-    if magic != PROJECTOR_MAGIC {
-        bail!("no Flash projector trailer");
-    }
-    let start = data
-        .len()
-        .checked_sub(8 + len)
-        .ok_or_else(|| anyhow!("projector trailer length out of range"))?;
-    let swf = &data[start..data.len() - 8];
-    if !swf.starts_with(b"FWS") && !swf.starts_with(b"CWS") {
-        bail!("embedded movie has no SWF header");
-    }
-    Ok(swf)
 }
 
 /// Files the 2002 installer contains; anything else in an archive is skipped.
@@ -144,16 +119,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extracts_appended_swf() {
-        let swf = b"FWS\x05\x10\x00\x00\x00payload!";
-        let mut exe = b"MZ fake projector stub".to_vec();
-        exe.extend_from_slice(swf);
-        exe.extend_from_slice(&PROJECTOR_MAGIC.to_le_bytes());
-        exe.extend_from_slice(&(swf.len() as u32).to_le_bytes());
-        assert_eq!(extract_swf(&exe).unwrap(), swf);
-    }
-
-    #[test]
     #[ignore]
     fn unpacks_original_installer() {
         // ZK_INSTALLER=/path/to/32-ZKinstall.exe cargo test -- --ignored
@@ -172,10 +137,5 @@ mod tests {
         assert!(safe_name(Path::new("/etc/evil.sav")).is_none());
         assert!(safe_name(Path::new("sub/menu.mid")).is_none());
         assert!(safe_name(Path::new("run.sh")).is_none());
-    }
-
-    #[test]
-    fn rejects_other_executables() {
-        assert!(extract_swf(b"MZ not a projector at all").is_err());
     }
 }

@@ -6,7 +6,12 @@ description = "Native cross-platform runner for the Czech adventure game Zlatý 
 license = "MIT OR Apache-2.0"
 publish = false
 
+[workspace]
+members = ["core"]
+exclude = ["vendor/swf"]
+
 [dependencies]
+kalich-core = { path = "core" }
 ruffle_core = { git = "https://github.com/ruffle-rs/ruffle", rev = "387ea68a46891b28e1579bc53725263396b4be38", features = ["audio", "mp3", "nellymoser", "default_compatibility_rules", "default_font"] }
 ruffle_render = { git = "https://github.com/ruffle-rs/ruffle", rev = "387ea68a46891b28e1579bc53725263396b4be38" }
 ruffle_render_wgpu = { git = "https://github.com/ruffle-rs/ruffle", rev = "387ea68a46891b28e1579bc53725263396b4be38" }

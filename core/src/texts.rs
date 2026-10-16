@@ -27,7 +27,7 @@ use swf::avm1::read::Reader;
 use swf::avm1::types::{Action, Value};
 use swf::{CharacterId, SwfStr, Tag};
 
-const BUILTIN: &str = include_str!("../assets/texts.tsv");
+const BUILTIN: &str = include_str!("../../assets/texts.tsv");
 const HEADER: &str = "lang\tid\toriginal\treplacement";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

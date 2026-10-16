@@ -14,7 +14,6 @@
 //! - Static text translations: a few drawn texts never got an English version;
 //!   they're swapped for a text field when `_root.english == 1`.
 
-use crate::settings::Hotspots;
 use anyhow::Context;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use swf::avm1::types::{Action, GetUrl, GetUrl2, If, Push, SendVarsMethod, Value};
@@ -38,6 +37,17 @@ const SPACE: i32 = 32;
 const PROP_VISIBLE: i32 = 7;
 /// New characters are numbered from here; the game uses ids below 3000.
 const FIRST_NEW_ID: CharacterId = 60000;
+
+/// When button hit areas are highlighted.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum Hotspots {
+    /// While Space is held.
+    #[default]
+    HoldSpace,
+    Always,
+    Off,
+}
 
 pub struct StaticTranslation {
     pub id: CharacterId,
@@ -632,14 +642,14 @@ mod tests {
 
 #[cfg(test)]
 mod game_tests {
-    //! Run against a real copy: `ZK_GAME=/path/to/ZlatyKalich.exe cargo test -- --ignored`
+    //! Run against a real copy: `ZK_GAME_EXE=/path/to/ZlatyKalich.exe cargo test -p kalich-core -- --ignored`
     use super::*;
 
     fn game_swf() -> Vec<u8> {
-        let path = std::env::var("ZK_GAME").expect("set ZK_GAME");
-        crate::game::Game::open(std::path::Path::new(&path))
+        let path = std::env::var("ZK_GAME_EXE").expect("set ZK_GAME_EXE");
+        crate::extract_swf(&std::fs::read(path).unwrap())
             .unwrap()
-            .swf
+            .to_vec()
     }
 
     #[test]

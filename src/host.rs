@@ -2,8 +2,7 @@
 //! world, plus save slots.
 
 use crate::music::Music;
-use crate::patch;
-use crate::save;
+use kalich_core::{patch, save};
 use ruffle_core::backend::navigator::{
     ErrorResponse, NavigationMethod, NavigatorBackend, NullExecutor, NullNavigatorBackend,
     OwnedFuture, Request, SuccessResponse,

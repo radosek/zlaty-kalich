@@ -1,21 +1,19 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod bytecode;
 mod game;
 mod gamepad;
 mod host;
 mod keys;
 mod music;
-mod patch;
-mod save;
 mod settings;
 mod settings_window;
-mod texts;
 mod ui;
 
 use anyhow::{Context, anyhow};
 use game::Game;
 use host::{AUTOSAVE_SLOT, AppEvent, Commands, Host, SlotNavigator};
+use kalich_core::texts::Texts;
+use kalich_core::{patch, texts};
 use music::Music;
 use ruffle_core::backend::navigator::NullExecutor;
 use ruffle_core::config::Letterbox;
@@ -35,7 +33,6 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use texts::Texts;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{ElementState, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, WindowEvent};
