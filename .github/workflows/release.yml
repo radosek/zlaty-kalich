@@ -58,7 +58,7 @@ jobs:
           mkdir -p dist
           cp target/release/zlaty-kalich.exe dist/ZlatyKalich-native.exe
           cp README.md assets/GeneralUser-GS-LICENSE.txt dist/
-          cd dist && 7z a ../zlaty-kalich-windows-x64.zip .
+          cd dist && 7z a zlaty-kalich-windows-x64.zip ZlatyKalich-native.exe README.md GeneralUser-GS-LICENSE.txt
 
       - name: Package (Linux AppImage)
         if: runner.os == 'Linux'
@@ -70,7 +70,6 @@ jobs:
           path: |
             dist/*.zip
             dist/*.AppImage
-            zlaty-kalich-windows-x64.zip
 
 
   release:

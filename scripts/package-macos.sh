@@ -48,5 +48,5 @@ PLIST
 # Ad-hoc signature so Gatekeeper lets a locally built app run.
 codesign --force --deep --sign - "$app"
 rm -f dist/*.zip
-(cd dist && ditto -c -k --keepParent "Zlatý Kalich.app" "zlaty-kalich-${version}-macos-universal.zip")
+(cd dist && ditto -c -k --keepParent "Zlatý Kalich.app" "zlaty-kalich-macos-universal.zip")
 echo "Built $app"
