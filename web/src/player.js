@@ -65,7 +65,7 @@ const TEXT = {
 
 const STYLE = `
 .zk { display: flex; flex-direction: column; height: 100%; min-height: 0; }
-.zk-tray { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 16px; align-items: center; padding: 16px; }
+.zk-tray { flex: 1; display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 16px; align-items: start; align-content: start; padding: 16px; }
 .zk-tray p { margin: 0 0 10px; max-width: 56ch; }
 .zk-tray h4 { margin: 0 0 6px; font-size: 16px; }
 .zk-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
