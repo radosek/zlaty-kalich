@@ -1,0 +1,16 @@
+{
+  "name": "boxb-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "./build.sh"
+  },
+  "dependencies": {
+    "libarchive.js": "2.0.2",
+    "spessasynth_lib": "4.3.14"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "wrangler": "4.151.1"
+  }
+}

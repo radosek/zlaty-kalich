@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Zlatý Kalich — boxb</title>
+<meta name="description" content="Zlatý Kalich (enteron, 2002) v prohlížeči. Vlož svou kopii hry a hraj.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;600&display=swap&subset=latin-ext" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+<script src="/ruffle/ruffle.js"></script>
+</head>
+<body>
+<main class="desktop">
+  <section class="window out game-window" id="w-game" data-title="Zlatý Kalich" role="dialog" aria-labelledby="t-game">
+    <div class="titlebar">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M10 11h12c0 4-2 6-5 7v4c2 .5 3 1 3 2h-8c0-1 1-1.5 3-2v-4c-3-1-5-3-5-7z" fill="#ffd23f"/></svg>
+      <span class="ttl" id="t-game">Zlatý Kalich</span>
+      <span class="ctl">
+        <button class="max out" type="button" aria-label="Maximalizovat">□</button>
+        <button class="close out" type="button" aria-label="Zavřít">×</button>
+      </span>
+    </div>
+
+    <div class="menubar" id="toolbar" hidden>
+      <label><span data-cs="Hudba" data-en="Music">Hudba</span> <input type="range" id="volume" min="0" max="100" step="5"></label>
+      <label><span data-cs="Pozice" data-en="Slot">Pozice</span> <select class="field in" id="slot"></select></label>
+      <label><span data-cs="Aktivní místa" data-en="Hotspots">Aktivní místa</span>
+        <select class="field in" id="hotspots">
+          <option value="hold-space" data-cs="mezerník" data-en="hold Space">mezerník</option>
+          <option value="always" data-cs="vždy" data-en="always">vždy</option>
+          <option value="off" data-cs="vypnuto" data-en="off">vypnuto</option>
+        </select>
+      </label>
+      <button class="btn out" type="button" id="export-saves" data-cs="Zálohovat pozice" data-en="Back up saves">Zálohovat pozice</button>
+      <button class="btn out" type="button" id="import-saves" data-cs="Obnovit pozice" data-en="Restore saves">Obnovit pozice</button>
+      <button class="btn out" type="button" id="eject" data-cs="Vysunout disk" data-en="Eject disc">Vysunout disk</button>
+      <input type="file" id="import-file" accept=".json" hidden>
+    </div>
+
+    <div class="wbody">
+      <div class="tray-panel" id="tray" aria-live="polite">
+        <div class="cardwin">
+          <div class="disc" aria-hidden="true"></div>
+          <div>
+            <h2 data-cs="Vlož disk" data-en="Insert disc">Vlož disk</h2>
+            <p id="tray-text" data-cs="Vyber instalačku 32-ZKinstall.exe, nebo složku se hrou (ZlatyKalich.exe a soubory .mid). Můžeš je sem i přetáhnout."
+               data-en="Pick the installer 32-ZKinstall.exe, or the game folder (ZlatyKalich.exe and the .mid files). You can also drop them here.">Vyber instalačku 32-ZKinstall.exe, nebo složku se hrou (ZlatyKalich.exe a soubory .mid). Můžeš je sem i přetáhnout.</p>
+            <div class="row">
+              <button class="btn out default" type="button" id="play" hidden data-cs="Hrát" data-en="Play">Hrát</button>
+              <button class="btn out" type="button" id="pick-files" data-cs="Procházet…" data-en="Browse…">Procházet…</button>
+              <button class="btn out" type="button" id="pick-folder" data-cs="Vybrat složku…" data-en="Choose folder…">Vybrat složku…</button>
+            </div>
+            <p class="error" id="error" hidden></p>
+            <input type="file" id="files" multiple hidden accept=".exe,.mid,.sav,.EXE,.MID,.SAV">
+            <input type="file" id="folder" webkitdirectory hidden>
+          </div>
+        </div>
+      </div>
+      <div class="player" id="player" hidden></div>
+    </div>
+
+    <div class="status">
+      <span class="sunk" id="status-main" data-cs="Hra zůstává jen ve tvém prohlížeči." data-en="The game stays in your browser.">Hra zůstává jen ve tvém prohlížeči.</span>
+      <span class="sunk" data-cs="Mezerník: aktivní místa" data-en="Space: hotspots">Mezerník: aktivní místa</span>
+      <span class="sunk" data-cs="Ovladač: páčka = kurzor, A = klik" data-en="Controller: stick = pointer, A = click">Ovladač: páčka = kurzor, A = klik</span>
+    </div>
+  </section>
+</main>
+
+<footer class="taskbar out">
+  <a class="start out" href="/"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="1" width="6" height="6" fill="#f00"/><rect x="9" y="1" width="6" height="6" fill="#0a0"/><rect x="1" y="9" width="6" height="6" fill="#00f"/><rect x="9" y="9" width="6" height="6" fill="#fc0"/></svg>Start</a>
+  <div class="tasks"></div>
+  <div class="tray sunk"><button type="button" data-lang-toggle>EN</button><span id="clock">--:--</span></div>
+</footer>
+<div class="pad-cursor" id="pad-cursor" hidden></div>
+
+<script type="module">
+  import "/lang.js";
+  import { open } from "/desktop.js";
+  const win = document.getElementById("w-game");
+  open(win);
+  win.addEventListener("close", () => (location.href = "/"));
+</script>
+<script src="app.js" type="module"></script>
+</body>
+</html>
